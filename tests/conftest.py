@@ -1,0 +1,253 @@
+from collections.abc import Collection
+
+import numpy as np
+import pandas as pd
+import pytest
+from anndata import AnnData
+
+from sckitflow.data.sim._dummy_adata import get_dummy_adata
+
+
+# Every consumer asserts on shapes and wiring relative to `adata.n_obs`, never on an
+# absolute cell count, so a few thousand cells buy the same coverage as the 60k this
+# used to build -- at ~1/50th the memory.
+@pytest.fixture(scope="session")
+def n_obs_pert() -> int:
+    return 1_000
+
+
+@pytest.fixture(scope="session")
+def n_obs_ctrl() -> int:
+    return 200
+
+
+@pytest.fixture(scope="session")
+def n_obs(
+    n_obs_pert: int,
+    n_obs_ctrl: int,
+) -> int:
+    return n_obs_ctrl + n_obs_pert
+
+
+@pytest.fixture(scope="session")
+def n_genes() -> int:
+    return 400
+
+
+@pytest.fixture(scope="session")
+def nunique_drugs() -> int:
+    return 3
+
+
+@pytest.fixture(scope="session")
+def nunique_kos() -> int:
+    return 5
+
+
+@pytest.fixture(scope="session")
+def nunique_targets() -> int:
+    return 5
+
+
+@pytest.fixture(scope="session")
+def nunique_source_splits() -> int:
+    return 5
+
+
+@pytest.fixture(scope="session")
+def paired_condition_n_feats() -> int:
+    return 100
+
+
+@pytest.fixture(scope="session")
+def drug_rep_n_feats() -> int:
+    return 512
+
+
+@pytest.fixture(scope="session")
+def ko_rep_n_feats() -> int:
+    return 512
+
+
+@pytest.fixture(scope="session")
+def source_rep_n_feats() -> int:
+    return 512
+
+
+@pytest.fixture(scope="session")
+def n_feats_obsm_repr() -> int:
+    return 200
+
+
+@pytest.fixture(scope="session")
+def continuous_target_dim() -> int:
+    return 10
+
+
+@pytest.fixture(scope="session")
+def src_coupling_dims() -> int:
+    return 16
+
+
+@pytest.fixture(scope="session")
+def tgt_coupling_dims() -> int:
+    return 20
+
+
+@pytest.fixture(scope="session")
+def control_key() -> str:
+    return "is_control"
+
+
+@pytest.fixture(scope="session")
+def is_control_val() -> str:
+    return "control"
+
+
+@pytest.fixture(scope="session")
+def repr_obsm_key() -> str:
+    return "X_repr"
+
+
+@pytest.fixture(scope="session")
+def continuous_target_obsm_key() -> str:
+    return "target_variable"
+
+
+@pytest.fixture(scope="session")
+def src_coupling_obsm_key() -> str:
+    return "X_src"
+
+
+@pytest.fixture(scope="session")
+def tgt_coupling_obsm_key() -> str:
+    return "X_tgt"
+
+
+@pytest.fixture(scope="session")
+def obs_columns_to_nunique_and_prefix(
+    nunique_drugs: int,
+    nunique_kos: int,
+    nunique_targets: int,
+    nunique_source_splits: int,
+) -> dict[str, tuple[int | str]]:
+    return {
+        "drugA": (nunique_drugs, "drug"),
+        "drugB": (nunique_drugs, "drug"),
+        "koA": (nunique_kos, "ko"),
+        "koB": (nunique_kos, "ko"),
+        "target": (nunique_targets, "target"),
+        "source_split": (nunique_source_splits, "source_split"),
+    }
+
+
+@pytest.fixture(scope="session")
+def obs_columns_to_fixed_val(
+    is_control_val: str,
+) -> dict[str, str]:
+    return {
+        "drugA": is_control_val,
+        "drugB": is_control_val,
+        "koA": is_control_val,
+        "koB": is_control_val,
+    }
+
+
+@pytest.fixture(scope="session")
+def obsm_keys_to_dim(
+    paired_condition_n_feats: int,
+    n_feats_obsm_repr: int,
+    continuous_target_dim: int,
+    repr_obsm_key: str,
+    continuous_target_obsm_key: str,
+    src_coupling_dims: int,
+    tgt_coupling_dims: int,
+    src_coupling_obsm_key: str,
+    tgt_coupling_obsm_key: str,
+) -> dict[str, int]:
+    return {
+        "drugA_time": 1,
+        "drugA_dose": 1,
+        "drugB_time": 1,
+        "drugB_dose": 1,
+        "koA_time": 1,
+        "koA_dose": 1,
+        "koB_time": 1,
+        "koB_dose": 1,
+        "paired_condition": paired_condition_n_feats,
+        repr_obsm_key: n_feats_obsm_repr,
+        continuous_target_obsm_key: continuous_target_dim,
+        tgt_coupling_obsm_key: tgt_coupling_dims,
+        src_coupling_obsm_key: src_coupling_dims,
+    }
+
+
+@pytest.fixture(scope="session")
+def uns_keys_to_nunique_prefix_and_dim(
+    nunique_drugs: int,
+    nunique_kos: int,
+    nunique_source_splits: int,
+    drug_rep_n_feats: int,
+    ko_rep_n_feats: int,
+    source_rep_n_feats: int,
+) -> dict[str, tuple[int, str, int]]:
+    return {
+        "drug": (nunique_drugs, "drug", drug_rep_n_feats),
+        "ko": (nunique_kos, "ko", ko_rep_n_feats),
+        "source_split": (nunique_source_splits, "source_split", source_rep_n_feats),
+    }
+
+
+@pytest.fixture(scope="session")
+def _dummy_adata(
+    n_obs_pert: int,
+    n_obs_ctrl: int,
+    n_genes: int,
+    obsm_keys_to_dim: dict[str, int],
+    obs_columns_to_nunique_and_prefix: dict[str, tuple[int | str]],
+    uns_keys_to_nunique_prefix_and_dim: dict[str, int | str],
+    obs_columns_to_fixed_val: dict[str, str],
+    control_key: str,
+) -> AnnData:
+    """Build the dummy AnnData exactly once per session.
+
+    Never request this directly from a test -- use `adata`, which hands out a copy.
+    """
+    return get_dummy_adata(
+        n_obs_pert=n_obs_pert,
+        n_obs_ctrl=n_obs_ctrl,
+        n_genes=n_genes,
+        obsm_keys_to_dim=obsm_keys_to_dim,
+        obs_columns_to_nunique_and_prefix=obs_columns_to_nunique_and_prefix,
+        uns_keys_to_nunique_prefix_and_dim=uns_keys_to_nunique_prefix_and_dim,
+        obs_columns_to_fixed_val=obs_columns_to_fixed_val,
+        control_key=control_key,
+        rng=np.random.default_rng(0),
+    )
+
+
+@pytest.fixture
+def adata(_dummy_adata: AnnData) -> AnnData:
+    """A fresh copy of the session-wide dummy AnnData.
+
+    Consumers routinely mutate `.obs`, `.obsm` and `.uns` in place, so the copy is
+    what keeps the session fixture safe to share.
+    """
+    return _dummy_adata.copy()
+
+
+@pytest.fixture
+def registry() -> dict[str, Collection[str]]:
+    return {"level0": ["level0-A", "level0-B"], "level1": ["level1-A", "level1-B"]}
+
+
+@pytest.fixture
+def sample_df():
+    return pd.DataFrame(
+        {
+            "cat1": ["a", "b", "a", "c"],
+            "cat2": [0, 1, 0, 1],
+            "num": [0.1, 0.2, 0.3, 0.4],
+        }
+    )
+    return adata

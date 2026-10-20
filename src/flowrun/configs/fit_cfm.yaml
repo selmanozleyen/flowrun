@@ -1,0 +1,413 @@
+# =============================================================================
+# fit_cfm.yaml — full config for the Conditional Flow Matching training pipeline.
+#
+# Every top-level section below corresponds to a `config.<section>.<key>`
+# access in `flowrun/fit_cfm.py`. Target environment: lightning 2.6.6
+# (verified against the pasted Trainer signature).
+#
+# `flowrun-fit-cfm` (or `python -m flowrun.fit_cfm`) has Hydra load this file and
+# `main(config)` receives it as an `omegaconf.DictConfig`.
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# Hydra runtime
+#
+# By default Hydra chdirs into `outputs/<date>/<time>/` before calling
+# `main()`, which makes every relative path below resolve inside that output
+# tree. Disable chdir so `save.run_dir`, `model_checkpoint.dirpath`, and logger
+# `save_dir` resolve from the launch directory. Set to true only if you want
+# the `outputs/` isolation AND use absolute paths elsewhere.
+# -----------------------------------------------------------------------------
+hydra:
+  job:
+    chdir: false
+
+# -----------------------------------------------------------------------------
+# Input data paths (read by `read_adatas`)
+#
+# target_adata:  path to the `.h5ad` used for training. Controls are picked from it by the
+#                datamanager's `control_values_dict` (or `matched_pairs`).
+# -----------------------------------------------------------------------------
+paths:
+  target_adata: "/abs/path/to/target.h5ad"
+
+# -----------------------------------------------------------------------------
+# Probability path (`get_probability_path_cfg`)
+#
+# `name` must be one of:
+#   linear_dirac | linear_gaussian | schrodinger_bridge | variance_preserving
+# `eps` is only consumed by `schrodinger_bridge`, but the key is read
+# unconditionally, so keep it present.
+# -----------------------------------------------------------------------------
+probability_path:
+  name: "linear_gaussian"
+  sigma: 0.1
+  eps: 0.01
+
+# -----------------------------------------------------------------------------
+# Samplers (`get_time_sampler_cfg` / `get_noise_sampler_cfg`)
+#
+# Only one value each is supported:
+#   time_sampler.name  == "uniform"            → torch.rand
+#   noise_sampler.name == "isotropic_gaussian" → torch.randn
+# Any other value raises ValueError at `main()`.
+# -----------------------------------------------------------------------------
+time_sampler:
+  name: "uniform"
+
+noise_sampler:
+  name: "isotropic_gaussian"
+
+# -----------------------------------------------------------------------------
+# Splitter (`CombinationSplitterConfig`)
+#
+#   split_key         obs column that receives the split label
+#   group_keys        obs columns forming split groups (e.g. batch IDs)
+#   always_train_keys groups that must appear in the training split
+#   control_key       obs column identifying the control condition
+#   control_value     value in `control_key` marking control cells
+#   test_fraction     fraction held out for test
+#   *_label           string labels written into the split column
+# -----------------------------------------------------------------------------
+splitter:
+  split_key: "split"
+  group_keys: ["batch"]
+  always_train_keys: ["control"]
+  control_key: "condition"
+  control_value: "control"
+  test_fraction: 0.2
+  train_label: "train"
+  test_label: "test"
+  control_label: "control"
+
+# -----------------------------------------------------------------------------
+# DataManager (`DataManagerConfig`)
+#
+#   sample_rep             .obsm key used as the sample representation (e.g. "X_pca")
+#   conditions             obs columns defining the conditional variables
+#   conditions_reps        per-condition representation overrides
+#   conditions_covariates  per-condition extra covariate columns
+#   control_values_dict    {obs_col: value} pairs identifying control cells
+#   matched_pairs          pair source/target samples (true) or not (false)
+#   split_by               obs column for group-aware splits — must match
+#                          `splitter.split_key`
+#   condition_state_key    obs column naming the cell-state condition
+#   target_categorical_covs_dict  categorical covariates on the target side
+#   target_continuous_covs        continuous covariates on the target side
+#   groups / groups_reps          extra grouping metadata
+#   groups_encoding               {group: encoder spec}, e.g. {type: group_encoder.one_hot, categories: [...]}
+#   rep_lin / source_rep_quad / target_rep_quad / use_linear
+#                                 linear-vs-quadratic representation flags
+# -----------------------------------------------------------------------------
+datamanager:
+  sample_rep: "X_pca"
+  categorical_conditions: {}
+  categorical_reps: {}
+  continuous_conditions: []
+  control_values_dict: {}
+  matched_pairs: false
+  split_by: "${splitter.split_key}"
+  condition_state_key: null
+  target_categorical_covs_dict: {}
+  target_continuous_covs: []
+  groups: []
+  groups_reps: {}
+  groups_encoding: {}
+  rep_lin: null
+  source_rep_quad: null
+  target_rep_quad: null
+  use_linear: true
+
+# -----------------------------------------------------------------------------
+# DataModule (`FlowDataModule`)
+# -----------------------------------------------------------------------------
+datamodule:
+  train_split: "train"
+  n_train_steps: 10000
+  batch_size: 256
+  dtype: "float32"
+  loader_kwargs: {}
+
+# -----------------------------------------------------------------------------
+# Transform (`get_transform_cfg`)
+#
+# Applies a preprocessing transform to `datamanager.sample_rep` (or `.X` when
+# `sample_rep is null`). Fitted **on the training split only** to avoid leakage,
+# then applied to the full dataset. The pre-transform matrix is preserved under
+# `adata.obsm["original_rep"]`. The fitted transform is persisted to
+# `save.run_dir` as `transform.json` + `transform_params.npz`.
+#
+# `name` must be one of:
+#   identity   → no-op; anything goes through unchanged
+#   pca        → PCATransformConfig(n_components=...)
+#   zscore     → ZScoreTransformConfig(epsilon=...)
+#   whitening  → WhiteningTransformConfig(method=..., epsilon=...)
+# -----------------------------------------------------------------------------
+transform:
+  name: "identity"
+  n_components: null
+  epsilon: 1.0e-8
+  method: "zca"
+
+# -----------------------------------------------------------------------------
+# Velocity field network (`MLPVelocityConfig`)
+#
+# Field names match `sckitflow.core.nn.MLPVelocityConfig`:
+#   encode_state, encode_time, time_features_id, num_time_features, max_period,
+#   state_encoder_output_dim, time_encoder_output_dim,
+#   state_encoder_mlp_kwargs, time_encoder_mlp_kwargs, vf_decoder_mlp_kwargs,
+#   conditioning_id, conditioning_kwargs, condition_encoder_input_layers,
+#   condition_encoder_output_dim, condition_encoder_pooling_*,
+#   condition_encoder_output_layers_kwargs,
+#   source_encoder_mlp_kwargs, source_encoder_output_dim
+#
+# Source encoder rule
+# -------------------
+# `source_encoder_*` is **off by default**. Only quadratic couplings
+# (``gromov-wasserstein`` / ``fused``) in a paired schema need the VF to
+# encode the source state. Linear OT couplings (``exact`` / ``sinkhorn`` /
+# ``partial`` / ``unbalanced``) couple samples for the interpolation path
+# but the VF itself does not need to see the source. Unpaired schemas have
+# no control pool → no source tensor at all.
+#
+# To enable for a quadratic-coupled run, override in the shell:
+#   module.source_encoder_output_dim=32 \
+#   module.source_encoder_mlp_kwargs.hidden_dims=[32] \
+#   module.source_encoder_mlp_kwargs.activation_cls=silu
+# -----------------------------------------------------------------------------
+module:
+  encode_state: true
+  encode_time: true
+  time_features_id: "torch-cfm"
+  num_time_features: 64
+  max_period: 10000.0
+  state_encoder_output_dim: 128
+  time_encoder_output_dim: 128
+  state_encoder_mlp_kwargs:
+    hidden_dims: [512, 512]
+    activation_cls: "silu"
+    use_layernorm: true
+    use_batchnorm: false
+    dropout_p: 0.0
+  time_encoder_mlp_kwargs:
+    hidden_dims: [128, 128]
+    activation_cls: "silu"
+    use_layernorm: true
+    use_batchnorm: false
+    dropout_p: 0.0
+  vf_decoder_mlp_kwargs:
+    hidden_dims: [512, 512]
+    activation_cls: "silu"
+    use_layernorm: true
+    use_batchnorm: false
+    dropout_p: 0.0
+  conditioning_id: "concat"
+  conditioning_kwargs: null
+  condition_encoder_input_layers: null
+  condition_encoder_output_dim: 64
+  condition_encoder_pooling_mode: "mean"
+  condition_encoder_pooling_kwargs: {}
+  condition_encoder_pooling_proj_dim: 64
+  condition_encoder_pooling_proj_bias: true
+  condition_encoder_output_layers_kwargs:
+    hidden_dims: [128]
+    activation_cls: "silu"
+  source_encoder_mlp_kwargs: null
+  source_encoder_output_dim: null
+
+# -----------------------------------------------------------------------------
+# Training method (`CFMTrainingConfig`)
+# -----------------------------------------------------------------------------
+training:
+  generate_from_noise: true
+
+# -----------------------------------------------------------------------------
+# Coupling (`get_coupling_cfg`)
+#
+# `method` must be one of:
+#   independent | exact | sinkhorn | partial | unbalanced
+#               | gromov-wasserstein | fused
+#
+# Keep ALL keys below so the method is switchable from the YAML alone.
+# -----------------------------------------------------------------------------
+coupling:
+  method: "independent"
+  scale_cost: "mean"
+  num_iter_max: 100
+  reg: 0.05
+  stop_thr: 1.0e-6
+  m: 0.9
+  reg_m: 1.0
+  epsilon: 0.01
+  max_iter: 100
+  tol: 1.0e-6
+  alpha: 0.5
+
+# -----------------------------------------------------------------------------
+# Inference method (`ODEInferenceConfig`)
+# -----------------------------------------------------------------------------
+inference:
+  generate_from_noise: true
+  solver_kwargs:
+    method: "euler"
+    rtol: 1.0e-5
+    atol: 1.0e-5
+  return_trajectory: false
+  n_steps: 50
+  n_samples: 1000
+
+# -----------------------------------------------------------------------------
+# Optimizer (a `torch.optim` class by name, with its kwargs)
+# -----------------------------------------------------------------------------
+optimizer:
+  name: "Adam"
+  kwargs:
+    lr: 1.0e-4
+    weight_decay: 1.0e-5
+    betas: [0.9, 0.999]
+
+# -----------------------------------------------------------------------------
+# Validation metrics (`EnergyDistance` / `MaximumMeanDiscrepancy`)
+# -----------------------------------------------------------------------------
+metrics:
+  edist:
+    dist_sync_on_step: false
+  mmd:
+    gammas: [1.0, 2.0, 4.0, 8.0, 16.0]
+    dist_sync_on_step: false
+
+# -----------------------------------------------------------------------------
+# Training plan (`TrainingPlan`)
+# -----------------------------------------------------------------------------
+training_plan:
+  lr_scheduler_interval: "step"
+  seed: 42
+
+# -----------------------------------------------------------------------------
+# Loggers (`WandbLogger` / `CSVLogger`)
+# -----------------------------------------------------------------------------
+loggers:
+  wandb:
+    name: "cfm-run"
+    save_dir: "./logs/wandb"
+    offline: true
+    id: null
+    anonymous: null
+    version: null
+    project: "sckitflow"
+    log_model: false
+    experiment: null
+    prefix: ""
+    init_kwargs: {}
+  csv:
+    save_dir: "./logs/csv"
+    name: "cfm-run"
+    version: null
+    prefix: ""
+    flush_logs_every_n_steps: 100
+
+# -----------------------------------------------------------------------------
+# Callbacks
+# -----------------------------------------------------------------------------
+callbacks:
+  early_stopping:
+    monitor: "val/edist"
+    min_delta: 0.0
+    patience: 20
+    verbose: true
+    mode: "min"
+    strict: false
+    check_finite: true
+    stopping_threshold: null
+    divergence_threshold: null
+    check_on_train_epoch_end: false
+  grad_accumulation:
+    scheduling:
+      0: 1
+      5000: 2
+      8000: 4
+  lr_monitor:
+    logging_interval: "step"
+    log_momentum: false
+  model_checkpoint:
+    dirpath: "./checkpoints"
+    filename: "{epoch:02d}-{step:06d}"
+    monitor: "val/edist"
+    verbose: true
+    save_last: true
+    save_top_k: 3
+    save_weights_only: false
+    mode: "min"
+    auto_insert_metric_name: true
+    every_n_train_steps: 500
+    train_time_interval: null
+    every_n_epochs: null
+    save_on_train_epoch_end: false
+
+# -----------------------------------------------------------------------------
+# Trainer (lightning 2.6.6)
+# -----------------------------------------------------------------------------
+trainer:
+  accelerator: "auto"
+  strategy: "auto"
+  devices: 1
+  num_nodes: 1
+  precision: "32-true"
+
+  fast_dev_run: false
+  max_epochs: 100
+  min_epochs: null
+  max_steps: -1
+  min_steps: null
+  max_time: null
+
+  limit_train_batches: 1.0
+  limit_val_batches: 1.0
+  limit_test_batches: 1.0
+  limit_predict_batches: 1.0
+  overfit_batches: 0.0
+  val_check_interval: 1.0
+  check_val_every_n_epoch: 1
+  num_sanity_val_steps: 2
+  log_every_n_steps: 50
+
+  enable_checkpointing: true
+  enable_progress_bar: true
+  enable_model_summary: true
+  inference_mode: true
+  barebones: false
+  enable_autolog_hparams: true
+  model_registry: null
+
+  gradient_clip_val: 1.0
+  gradient_clip_algorithm: "norm"
+
+  deterministic: false
+  benchmark: false
+  detect_anomaly: false
+
+  use_distributed_sampler: true
+  sync_batchnorm: false
+
+  reload_dataloaders_every_n_epochs: 0
+
+  profiler: null
+
+  default_root_dir: "./logs"
+
+  ckpt_path: null
+
+# -----------------------------------------------------------------------------
+# Run metadata and persistence
+# -----------------------------------------------------------------------------
+run:
+  loader_seed: 42
+  splitter_seed: 42
+  method_seed: ${training_plan.seed}
+  allow_overwrite: false
+
+# -----------------------------------------------------------------------------
+# Saved-model directory (`Model.save_pretrained` + `save_transform`)
+# -----------------------------------------------------------------------------
+save:
+  run_dir: "./runs/cfm_run"

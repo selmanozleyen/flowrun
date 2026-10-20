@@ -1,0 +1,39 @@
+[build-system]
+build-backend = "hatchling.build"
+requires = [ "hatchling" ]
+
+[project]
+name = "flowrun"
+version = "0.0.0"
+description = "Train flow-matching models on single-cell perturbation data, from reusable steps"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+  "anndata",
+  "hydra-core>=1.3",
+  "numpy",
+  "omegaconf",
+  "scanpy>=1.10",
+  "scikit-learn",
+  "sckitflow[torch]",
+  "wandb",
+]
+optional-dependencies.test = [
+  "pytest",
+  "pytest-xdist>=3",
+]
+scripts.flowrun-fit-cfm = "flowrun.fit_cfm:main"
+
+[tool.hatch.build.targets.wheel]
+packages = [ "src/flowrun" ]
+
+[tool.uv.sources]
+sckitflow = { git = "https://github.com/theislab/sckitflow", branch = "main" }
+
+[tool.ruff]
+line-length = 120
+src = [ "src" ]
+
+[tool.pytest.ini_options]
+testpaths = [ "tests" ]
+addopts = [ "--import-mode=importlib" ]

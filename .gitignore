@@ -1,10 +1,6 @@
-.nextflow*
-work/
-data/
-results/
-.DS_Store
-testing/
-testing*
-*.pyc
-null/
-.lineage/
+.venv/
+__pycache__/
+.*cache/
+/outputs/
+/multirun/
+/wandb/
