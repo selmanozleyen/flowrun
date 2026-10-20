@@ -5,6 +5,12 @@ Based on cf-train's ``myapp-pca``: optionally pick HVGs (scanpy), accumulate the
 Only the training rows are read for the fit, chunk by chunk, so a backed AnnData
 (``anndata.read_h5ad(path, backed="r")``) never loads held-out cells. The fitted basis is stored in the
 AnnData, so predictions map back to genes with ``X_pca @ adata.varm["PCs"].T + adata.var["pca_mean"]``.
+
+TODO(scale): the cost grows with genes, not cells -- the covariance is genes x genes and gets
+eigendecomposed, so ``n_hvg=None`` on ~20k genes needs ~3 GB and minutes of ``eigh``. For larger data:
+default to HVGs (as cf-train does), multiply chunks in float32 while accumulating in float64 (~30% faster),
+subsample for HVG selection instead of loading every training row, add cf-train's cupy GPU path, and read
+the input backed so held-out rows never leave disk.
 """
 
 from __future__ import annotations
