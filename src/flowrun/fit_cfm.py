@@ -129,7 +129,7 @@ from sckitflow.data import DataManagerConfig, FlowDataModule
 from sckitflow.trainer import TrainingPlan
 
 from flowrun import split
-from flowrun.pca import pca
+from flowrun.pca import pca, write_pca
 
 logger = get_logger(__name__)
 
@@ -570,15 +570,9 @@ def main(config: DictConfig) -> float:
     model.save_pretrained(config.save.run_dir, overwrite=config.run.allow_overwrite)
 
     if config.pca.n_comps is not None:
-        # The PCA as an AnnData without ``X``: obs/var names map it to the original cells and genes, and
-        # ``X_pca @ varm["PCs"].T + var["pca_mean"]`` maps predictions back to gene space.
-        ad.AnnData(
-            obs=adata.obs[[splitter.split_key]],
-            var=adata.var[["pca_mean"]],
-            obsm={config.datamanager.sample_rep: adata.obsm[config.datamanager.sample_rep]},
-            varm={"PCs": adata.varm["PCs"]},
-            uns={"pca": adata.uns["pca"]},
-        ).write_zarr(Path(config.save.run_dir) / "pca.zarr")
+        # Into the input file: every cell's projection, and the basis that maps predictions back to genes.
+        logger.info(f"Writing the PCA into {config.paths.target_adata}.")
+        write_pca(config.paths.target_adata, adata, config.datamanager.sample_rep, overwrite=config.pca.overwrite)
 
     # Capture the edist from the latest validation step.
     val_edist_key = f"val/{EDIST_KEY}"

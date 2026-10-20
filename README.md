@@ -33,6 +33,6 @@ pooled with attention, cell line as the group); `cellflow_smoke` is a small vers
   split shares;
   `shared_source_combination` holds out condition combinations, `shared_source_holdout` holds out chosen
   values of one column (e.g. cell lines).
-- `flowrun.pca`: `scanpy.pp.pca` on dask, fitted on the training split (reading only those rows' chunks); the basis is stored in the AnnData
-  and saved to `run_dir/pca.zarr` (obs/var names map it to the original cells and genes).
+- `flowrun.pca`: `scanpy.pp.pca` on dask, fitted on the training split (reading only those rows' chunks); every cell's projection and the
+  basis are written into the input file (`obsm[sample_rep]`, `varm["PCs"]`, `uns["pca"]`).
 - `flowrun.fit_cfm`: the training entry point.

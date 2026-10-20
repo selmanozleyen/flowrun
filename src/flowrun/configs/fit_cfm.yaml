@@ -134,15 +134,16 @@ datamodule:
 # -----------------------------------------------------------------------------
 # PCA (`flowrun.pca.pca`)
 #
-# Fitted on the training split only, then every cell is projected into
-# `obsm[datamanager.sample_rep]`. The basis is stored in the AnnData
-# (`varm["PCs"]`, `var["pca_mean"]`). `n_comps: null` skips it and trains on an
-# existing `sample_rep`.
+# Fitted on the training targets and the shared sources, then every cell is
+# projected into `obsm[datamanager.sample_rep]`. The projection and the basis
+# (`varm["PCs"]`, `uns["pca"]["mean"]`) are written into the input file.
+# `n_comps: null` skips it and trains on an existing `sample_rep`.
 # -----------------------------------------------------------------------------
 pca:
   n_comps: null
   n_hvg: null
   hvg_flavor: "seurat"
+  overwrite: false                # replace a PCA already in the input file
 
 # -----------------------------------------------------------------------------
 # Velocity field network (`MLPVelocityConfig`)

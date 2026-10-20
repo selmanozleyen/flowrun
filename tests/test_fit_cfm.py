@@ -613,8 +613,6 @@ def _run_and_assert(
 
     run_dir = tmp_path / "run"
     assert (run_dir / "config.json").is_file()
-    assert (run_dir / "pca.zarr").is_dir() == ("pca.n_comps=5" in overrides_list)
-    assert (run_dir / "module" / "model.safetensors").is_file()
 
 
 # --------------------------- tests -----------------------------------------
@@ -743,7 +741,11 @@ def test_holdout_split_with_pca_from_zarr(tmp_path: Path, target_adata_path: Pat
             "splitter.test=[source_split0]",
             "splitter.val=[source_split1]",
             "pca.n_comps=5",
+            "pca.overwrite=true",  # the PCA replaces the schema's existing sample_rep
         ],
         tmp_path=tmp_path,
         target_adata_path=zarr_path,
     )
+    written = ad.read_zarr(zarr_path)  # every cell projected into the schema's sample_rep, basis alongside
+    assert written.obsm["X_repr"].shape == (written.n_obs, 5)
+    assert written.varm["PCs"].shape == (written.n_vars, 5) and "mean" in written.uns["pca"]

@@ -1,5 +1,6 @@
 from pathlib import Path
 
+import anndata as ad
 import numpy as np
 import scipy.sparse as sp
 from hydra import compose, initialize_config_dir
@@ -42,4 +43,5 @@ def test_cellflow_smoke_runs_on_cellflow_shaped_zarr(tmp_path: Path):
         cfg = compose(config_name="fit_cfm", overrides=overrides)
     fit_cfm.main.__wrapped__(cfg)
     assert (tmp_path / "run" / "config.json").is_file()
-    assert (tmp_path / "run" / "pca.zarr").is_dir()
+    written = ad.read_zarr(tmp_path / "data.zarr")
+    assert written.obsm["X_pca"].shape == (written.n_obs, 20) and "mean" in written.uns["pca"]
