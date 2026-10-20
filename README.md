@@ -30,7 +30,8 @@ pooled with attention, cell line as the group); `cellflow_smoke` is a small vers
 ## Layout
 
 - `flowrun.split`: `train` / `val` / `test` labels for targets in an obs column, and `all` for the sources every
-  split shares;
+  split shares. `fit_cfm` writes the split into the input file's `obs` and reuses it on later runs
+  (`splitter.overwrite=true` re-splits).
   `shared_source_combination` holds out condition combinations, `shared_source_holdout` holds out chosen
   values of one column (e.g. cell lines).
 - `flowrun.pca`: `scanpy.pp.pca` on dask, fitted on the training split (reading only those rows' chunks); every cell's projection and the

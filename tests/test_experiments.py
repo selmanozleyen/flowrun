@@ -39,9 +39,17 @@ def test_cellflow_smoke_runs_on_cellflow_shaped_zarr(tmp_path: Path):
         "splitter.val_fraction=0.3",
         "hydra.job.chdir=false",
     ]
-    with initialize_config_dir(config_dir=str(Path(fit_cfm.__file__).parent / "configs"), version_base=None):
-        cfg = compose(config_name="fit_cfm", overrides=overrides)
-    fit_cfm.main.__wrapped__(cfg)
+
+    def run(*extra: str) -> ad.AnnData:
+        with initialize_config_dir(config_dir=str(Path(fit_cfm.__file__).parent / "configs"), version_base=None):
+            fit_cfm.main.__wrapped__(compose(config_name="fit_cfm", overrides=[*overrides, *extra]))
+        return ad.read_zarr(tmp_path / "data.zarr")
+
+    first = run()
     assert (tmp_path / "run" / "config.json").is_file()
-    written = ad.read_zarr(tmp_path / "data.zarr")
-    assert written.obsm["X_pca"].shape == (written.n_obs, 20) and "mean" in written.uns["pca"]
+    assert first.obsm["X_pca"].shape == (first.n_obs, 20) and "mean" in first.uns["pca"]
+    assert set(first.obs["split"]) == {"train", "val", "test", "all"}
+
+    # A second run on the same file reuses its split, whatever the seed; only the PCA needs an explicit overwrite.
+    second = run("run.splitter_seed=7", "pca.overwrite=true", "run.allow_overwrite=true")
+    assert second.obs["split"].equals(first.obs["split"])

@@ -129,6 +129,7 @@ from sckitflow.data import DataManagerConfig, FlowDataModule
 from sckitflow.trainer import TrainingPlan
 
 from flowrun import split
+from flowrun._store import write_obs_column
 from flowrun.pca import pca, write_pca
 
 logger = get_logger(__name__)
@@ -169,6 +170,30 @@ def read_zarr_backed_x(path: Path) -> ad.AnnData:
     return ad.AnnData(X=ad.io.sparse_dataset(x) if isinstance(x, zarr.Group) else x, **elems)
 
 
+def split_labels(obs, splitter: DictConfig, *, seed: int):
+    """The split column ``config.splitter`` describes."""
+    is_source = (
+        obs[splitter.source_key].astype(str).to_numpy() == str(splitter.source_value)
+        if splitter.source_key is not None
+        else np.zeros(len(obs), dtype=bool)
+    )
+    if splitter.type == "shared_source_combination":
+        return split.shared_source_combination(
+            obs,
+            splitter.group_keys,
+            is_source=is_source,
+            always_train_keys=splitter.always_train_keys,
+            test_fraction=splitter.test_fraction,
+            val_fraction=splitter.val_fraction,
+            seed=seed,
+        )
+    if splitter.type == "shared_source_holdout":
+        return split.shared_source_holdout(obs, splitter.key, is_source=is_source, test=splitter.test, val=splitter.val)
+    raise ValueError(
+        f"Unknown splitter.type {splitter.type!r}; use 'shared_source_combination' or 'shared_source_holdout'."
+    )
+
+
 @hydra.main(config_path="configs", config_name="fit_cfm", version_base=None)
 def main(config: DictConfig) -> float:
     """Main entrypoint for CFM training."""
@@ -189,34 +214,14 @@ def main(config: DictConfig) -> float:
     adata = read_zarr_backed_x(path) if path.suffix == ".zarr" else ad.read_h5ad(path)
     logger.info(f"Target adata read: {adata}")
 
-    # Split: one label per row in ``obs[splitter.split_key]``, read back as ``split_by``.
+    # Split: one label per row in ``obs[splitter.split_key]``, read back as ``split_by``. A split already in the
+    # input file is reused, so every model trained on the file shares it.
     splitter = config.splitter
-    if splitter.split_key in adata.obs.columns:
-        raise ValueError(f"adata.obs already has a {splitter.split_key!r} column; drop it to re-split.")
-    is_source = (
-        adata.obs[splitter.source_key].astype(str).to_numpy() == str(splitter.source_value)
-        if splitter.source_key is not None
-        else np.zeros(adata.n_obs, dtype=bool)
-    )
-    if splitter.type == "shared_source_combination":
-        labels = split.shared_source_combination(
-            adata.obs,
-            splitter.group_keys,
-            is_source=is_source,
-            always_train_keys=splitter.always_train_keys,
-            test_fraction=splitter.test_fraction,
-            val_fraction=splitter.val_fraction,
-            seed=config.run.splitter_seed,
-        )
-    elif splitter.type == "shared_source_holdout":
-        labels = split.shared_source_holdout(
-            adata.obs, splitter.key, is_source=is_source, test=splitter.test, val=splitter.val
-        )
+    new_split = splitter.split_key not in adata.obs.columns or splitter.overwrite
+    if new_split:
+        adata.obs[splitter.split_key] = split_labels(adata.obs, splitter, seed=config.run.splitter_seed)
     else:
-        raise ValueError(
-            f"Unknown splitter.type {splitter.type!r}; use 'shared_source_combination' or 'shared_source_holdout'."
-        )
-    adata.obs[splitter.split_key] = labels
+        logger.info(f"Reusing the split in obs[{splitter.split_key!r}]; set splitter.overwrite=true to re-split.")
 
     # PCA is fitted on the training targets and the shared sources, so held-out cells never shape the space.
     if config.pca.n_comps is not None:
@@ -569,6 +574,9 @@ def main(config: DictConfig) -> float:
     logger.info(f"Saving model {config.save.run_dir}.")
     model.save_pretrained(config.save.run_dir, overwrite=config.run.allow_overwrite)
 
+    if new_split:
+        logger.info(f"Writing the split to obs[{splitter.split_key!r}] of {config.paths.target_adata}.")
+        write_obs_column(config.paths.target_adata, splitter.split_key, adata.obs[splitter.split_key].array)
     if config.pca.n_comps is not None:
         # Into the input file: every cell's projection, and the basis that maps predictions back to genes.
         logger.info(f"Writing the PCA into {config.paths.target_adata}.")

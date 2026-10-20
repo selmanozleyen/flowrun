@@ -72,6 +72,7 @@ noise_sampler:
 # -----------------------------------------------------------------------------
 splitter:
   type: "shared_source_combination"
+  overwrite: false                # a split already in the input file is reused; true re-splits
   split_key: "split"
   source_key: "condition"
   source_value: "control"

@@ -22,6 +22,8 @@ import zarr
 from anndata import AnnData
 from fast_array_utils import stats
 
+from flowrun._store import open_store
+
 
 def pca(
     adata: AnnData,
@@ -91,30 +93,20 @@ def write_pca(path: str | Path, adata: AnnData, key: str = "X_pca", *, overwrite
     Writes ``obsm[key]``, ``varm["PCs"]`` and ``uns["pca"]``. Existing entries are only replaced with
     ``overwrite=True``, so a PCA already in the file is never lost silently.
     """
-    path = Path(path)
-    if path.suffix == ".zarr":
-        from annbatch import write_sharded
+    with open_store(path) as root:
+        entries = (f"obsm/{key}", "varm/PCs", "uns/pca")
+        existing = [e for e in entries if e in root]
+        if existing and not overwrite:
+            raise ValueError(f"{path} already has {existing}; set overwrite=True (pca.overwrite=true) to replace them.")
+        for e in existing:
+            del root[e]
+        for group in ("obsm", "varm", "uns"):
+            root.require_group(group)
+        if isinstance(root, zarr.Group):
+            from annbatch import write_sharded
 
-        root = zarr.open_group(path, mode="r+", use_consolidated=False)  # consolidated stores refuse edits
-    else:
-        import h5py
-
-        root = h5py.File(path, "r+")
-    entries = (f"obsm/{key}", "varm/PCs", "uns/pca")
-    existing = [e for e in entries if e in root]
-    if existing and not overwrite:
-        raise ValueError(f"{path} already has {existing}; set overwrite=True (pca.overwrite=true) to replace them.")
-    for e in existing:
-        del root[e]
-    for group in ("obsm", "varm", "uns"):
-        root.require_group(group)
-    if path.suffix == ".zarr":
-        write_sharded(root["obsm"], adata.obsm[key], key=key)  # row chunks, the layout annbatch streams
-    else:
-        ad.io.write_elem(root["obsm"], key, adata.obsm[key])
-    ad.io.write_elem(root["varm"], "PCs", adata.varm["PCs"])
-    ad.io.write_elem(root["uns"], "pca", adata.uns["pca"])
-    if isinstance(root, zarr.Group):
-        zarr.consolidate_metadata(path)
-    else:
-        root.close()
+            write_sharded(root["obsm"], adata.obsm[key], key=key)  # row chunks, the layout annbatch streams
+        else:
+            ad.io.write_elem(root["obsm"], key, adata.obsm[key])
+        ad.io.write_elem(root["varm"], "PCs", adata.varm["PCs"])
+        ad.io.write_elem(root["uns"], "pca", adata.uns["pca"])

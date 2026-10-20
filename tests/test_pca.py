@@ -1,11 +1,13 @@
 import anndata as ad
 import numpy as np
+import pandas as pd
 import pytest
 import scipy.sparse as sp
 import zarr
 from anndata import AnnData
 from sklearn.decomposition import PCA
 
+from flowrun._store import write_obs_column
 from flowrun.pca import pca, write_pca
 
 
@@ -61,3 +63,17 @@ def test_write_pca_into_the_input_file(tmp_path, suffix):
     with pytest.raises(ValueError, match="already has"):
         write_pca(path, adata)
     write_pca(path, adata, overwrite=True)
+
+
+@pytest.mark.parametrize("suffix", [".zarr", ".h5ad"])
+def test_write_obs_column_keeps_the_rest(tmp_path, suffix):
+    path = tmp_path / f"a{suffix}"
+    adata = AnnData(np.zeros((4, 2)), obs={"cell_line": ["A", "A", "B", "B"]})
+    (adata.write_zarr if suffix == ".zarr" else adata.write_h5ad)(path)
+    write_obs_column(path, "split", pd.Categorical(["train", "test", "all", "train"]))
+    write_obs_column(path, "split", pd.Categorical(["train", "val", "all", "train"]))  # replaces, keeps order
+
+    back = (ad.read_zarr if suffix == ".zarr" else ad.read_h5ad)(path)
+    assert list(back.obs.columns) == ["cell_line", "split"]
+    assert back.obs["split"].tolist() == ["train", "val", "all", "train"]
+    assert back.obs["cell_line"].tolist() == ["A", "A", "B", "B"]
