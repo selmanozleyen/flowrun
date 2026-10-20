@@ -1,8 +1,9 @@
-"""Split labels for ``adata.obs``: each function reads only ``obs`` and returns one label per row.
+"""Split labels for ``adata.obs``: each function reads only ``obs`` and returns ``"train"`` / ``"val"`` /
+``"test"`` per row.
 
-Labels are ``"train"``, ``"val"``, ``"test"`` and ``"control"``. Controls are the shared source population,
-so they are never split. Write the result to ``adata.obs[split_by]``; sckitflow's ``DataManagerConfig(split_by=...)``
-reads it from there.
+Both splitters share sources: source rows are labelled ``"train"``, and sckitflow draws every split's sources
+from all of them (matched by group), ignoring their label. Only targets are split, so a target is in exactly one
+split. Write the result to ``adata.obs[split_by]``; sckitflow's ``DataManagerConfig(split_by=...)`` reads it.
 """
 
 from __future__ import annotations
@@ -14,63 +15,62 @@ import numpy as np
 import pandas as pd
 
 
-def holdout(
+def shared_source_holdout(
     obs: pd.DataFrame,
     key: str,
     *,
+    is_source: np.ndarray,
     test: Sequence[str] = (),
     val: Sequence[str] = (),
-    control_key: str | None = None,
-    control_value: str = "control",
 ) -> pd.Series:
-    """Hold out chosen values of one categorical, e.g. whole cell lines.
+    """Hold out chosen values of one column, e.g. whole cell lines.
 
-    Rows whose ``obs[key]`` is in ``test`` (``val``) are labelled ``"test"`` (``"val"``), the rest ``"train"``.
+    Targets whose ``obs[key]`` is in ``test`` (``val``) are labelled ``"test"`` (``"val"``), the rest ``"train"``.
     """
     values = obs[key].astype(str)
     unknown = set(map(str, (*test, *val))) - set(values)
     if unknown:
         raise ValueError(f"{sorted(unknown)} not found in obs[{key!r}]; it has {sorted(set(values))}.")
     labels = np.full(len(obs), "train", dtype=object)
-    labels[values.isin(list(map(str, val))).to_numpy()] = "val"
-    labels[values.isin(list(map(str, test))).to_numpy()] = "test"
-    return _with_controls(obs, labels, control_key, control_value)
+    labels[values.isin(list(map(str, val))).to_numpy() & ~is_source] = "val"
+    labels[values.isin(list(map(str, test))).to_numpy() & ~is_source] = "test"
+    return pd.Series(pd.Categorical(labels), index=obs.index)
 
 
-def combination(
+def shared_source_combination(
     obs: pd.DataFrame,
     group_keys: Sequence[str],
     *,
+    is_source: np.ndarray,
     always_train_keys: Sequence[str] = (),
-    control_key: str | None = None,
-    control_value: str = "control",
     test_fraction: float = 0.2,
+    val_fraction: float = 0.0,
     seed: int = 0,
 ) -> pd.Series:
     """Hold out whole ``group_keys`` combinations, so a held-out combination is unseen in training.
 
-    Combinations are grouped by their ``always_train_keys`` values (a stratum), and a stratum of ``k``
-    combinations gives ``floor(test_fraction * k)`` of them to test, never more than ``k - 1``. With
-    ``group_keys=["cell_line", "drug"]`` and ``always_train_keys=["cell_line"]``, every cell line keeps some
-    drugs in train.
+    Target combinations are grouped by their ``always_train_keys`` values (a stratum). A stratum of ``k``
+    combinations gives ``floor(test_fraction * k)`` to test and ``floor(val_fraction * k)`` to val, keeping at
+    least one in train. With ``group_keys=["cell_line", "drug"]`` and ``always_train_keys=["cell_line"]``,
+    every cell line keeps some drugs in train.
     """
     if not set(always_train_keys) <= set(group_keys):
         raise ValueError(
             f"always_train_keys {list(always_train_keys)} must be a subset of group_keys {list(group_keys)}."
         )
-    is_control = _is_control(obs, control_key, control_value)
     gk, atk = list(group_keys), list(always_train_keys)
-    combos = obs.loc[~is_control, gk].astype(str).drop_duplicates()
+    combos = obs.loc[~is_source, gk].astype(str).drop_duplicates()
 
     rng = np.random.default_rng(seed)
-    test_combos: list[tuple] = []
+    held: dict[tuple, str] = {}
     strata = combos.groupby(atk, sort=True) if atk else [(None, combos)]
     for _, grp in strata:
         rows = list(map(tuple, grp[gk].to_numpy()))
         n_test = min(int(np.floor(test_fraction * len(rows))), len(rows) - 1)
-        if n_test > 0:
-            test_combos.extend(rows[i] for i in np.sort(rng.choice(len(rows), size=n_test, replace=False)))
-    if test_fraction > 0 and not test_combos:
+        n_val = min(int(np.floor(val_fraction * len(rows))), len(rows) - 1 - n_test)
+        order = rng.permutation(len(rows))
+        held |= {rows[i]: "test" for i in order[:n_test]} | {rows[i]: "val" for i in order[n_test : n_test + n_val]}
+    if test_fraction > 0 and "test" not in held.values():
         warnings.warn(
             f"Nothing was held out: at test_fraction={test_fraction} a stratum needs at least "
             f"{int(np.ceil(1 / test_fraction))} combinations to give one to test.",
@@ -78,19 +78,7 @@ def combination(
             stacklevel=2,
         )
 
-    labels = np.full(len(obs), "train", dtype=object)
-    if test_combos:
-        combo_index = pd.MultiIndex.from_arrays([obs[c].astype(str).to_numpy() for c in gk])
-        labels[combo_index.isin(test_combos)] = "test"
-    return _with_controls(obs, labels, control_key, control_value)
-
-
-def _is_control(obs: pd.DataFrame, control_key: str | None, control_value: str) -> np.ndarray:
-    if control_key is None:
-        return np.zeros(len(obs), dtype=bool)
-    return obs[control_key].astype(str).to_numpy() == str(control_value)
-
-
-def _with_controls(obs: pd.DataFrame, labels: np.ndarray, control_key: str | None, control_value: str) -> pd.Series:
-    labels[_is_control(obs, control_key, control_value)] = "control"
+    keys = pd.MultiIndex.from_arrays([obs[c].astype(str).to_numpy() for c in gk])
+    labels = np.asarray([held.get(k, "train") for k in keys], dtype=object)
+    labels[is_source] = "train"
     return pd.Series(pd.Categorical(labels), index=obs.index)

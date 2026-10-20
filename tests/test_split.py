@@ -1,32 +1,36 @@
 import pandas as pd
 import pytest
 
-from flowrun.split import combination, holdout
+from flowrun.split import shared_source_combination, shared_source_holdout
 
 OBS = pd.DataFrame(
     {
-        "cell_line": ["A"] * 5 + ["B"] * 5,
-        "drug": ["control", "d0", "d1", "d2", "d3", "control", "d0", "d1", "d2", "d3"],
+        "cell_line": ["A"] * 6 + ["B"] * 6,
+        "drug": ["control", "d0", "d1", "d2", "d3", "d4"] * 2,
     }
 )
+IS_SOURCE = (OBS["drug"] == "control").to_numpy()
 
 
-def test_holdout_by_cell_line():
-    labels = holdout(OBS, "cell_line", test=["B"], control_key="drug")
-    assert labels.tolist() == ["control"] + ["train"] * 4 + ["control"] + ["test"] * 4
+def test_holdout_by_cell_line_keeps_sources_in_train():
+    labels = shared_source_holdout(OBS, "cell_line", is_source=IS_SOURCE, test=["B"])
+    assert labels.tolist() == ["train"] * 7 + ["test"] * 5
 
 
 def test_holdout_rejects_unknown_values():
     with pytest.raises(ValueError, match="not found"):
-        holdout(OBS, "cell_line", val=["C"])
+        shared_source_holdout(OBS, "cell_line", is_source=IS_SOURCE, val=["C"])
 
 
 def test_combination_keeps_every_cell_line_in_train():
-    labels = combination(
-        OBS, ["cell_line", "drug"], always_train_keys=["cell_line"], control_key="drug", test_fraction=0.5
+    labels = shared_source_combination(
+        OBS,
+        ["cell_line", "drug"],
+        is_source=IS_SOURCE,
+        always_train_keys=["cell_line"],
+        test_fraction=0.4,
+        val_fraction=0.2,
     )
     per_line = pd.crosstab(OBS["cell_line"], labels)
-    assert (per_line["train"] == 2).all() and (per_line["test"] == 2).all() and (per_line["control"] == 1).all()
-    assert combination(OBS, ["cell_line", "drug"], control_key="drug", seed=3).equals(
-        combination(OBS, ["cell_line", "drug"], control_key="drug", seed=3)
-    )
+    assert (per_line["test"] == 2).all() and (per_line["val"] == 1).all() and (per_line["train"] == 3).all()
+    assert (labels[IS_SOURCE] == "train").all()

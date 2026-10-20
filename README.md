@@ -20,7 +20,9 @@ Every key and its default lives in `src/flowrun/configs/fit_cfm.yaml`. The run i
 
 ## Layout
 
-- `flowrun.split`: split labels written to an obs column; `combination` holds out condition
-  combinations, `holdout` holds out chosen values of one column (e.g. cell lines).
-- `flowrun.pca`: PCA fitted on the training split, reading only those rows; the basis is stored in the AnnData.
+- `flowrun.split`: `train` / `val` / `test` labels for an obs column, with sources shared across splits;
+  `shared_source_combination` holds out condition combinations, `shared_source_holdout` holds out chosen
+  values of one column (e.g. cell lines).
+- `flowrun.pca`: PCA fitted on the training split, reading only those rows; the basis is stored in the AnnData
+  and saved to `run_dir/pca.zarr` (obs/var names map it to the original cells and genes).
 - `flowrun.fit_cfm`: the training entry point.

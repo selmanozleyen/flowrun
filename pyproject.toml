@@ -17,6 +17,8 @@ dependencies = [
   "scikit-learn",
   "sckitflow[torch]",
   "wandb",
+  "zarr>=3",
+  "zarrs",
 ]
 optional-dependencies.test = [
   "pytest",

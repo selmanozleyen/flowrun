@@ -61,24 +61,24 @@ noise_sampler:
 # -----------------------------------------------------------------------------
 # Splitter (`flowrun.split`)
 #
-# Writes "train" / "val" / "test" / "control" into `obs[split_key]`.
+# Writes "train" / "val" / "test" into `obs[split_key]`. Sources (`source_key ==
+# source_value`) are shared: labelled "train" and drawn by every split.
 #
-#   type              "combination": hold out whole `group_keys` combinations
-#                     "holdout": hold out chosen values of one obs column `key`
-#   split_key         obs column that receives the split label
-#   control_key       obs column identifying the control condition
-#   control_value     value in `control_key` marking control cells (never split)
-#   combination:  group_keys, always_train_keys (keep each value in train), test_fraction
-#   holdout:      key, test (values held out for test), val (values held out for validation)
+#   type   "shared_source_combination": hold out whole `group_keys` combinations
+#          "shared_source_holdout": hold out chosen values of one obs column `key`
+#   shared_source_combination:  group_keys, always_train_keys (keep each value in
+#                               train), test_fraction, val_fraction
+#   shared_source_holdout:      key, test (values for test), val (values for val)
 # -----------------------------------------------------------------------------
 splitter:
-  type: "combination"
+  type: "shared_source_combination"
   split_key: "split"
-  control_key: "condition"
-  control_value: "control"
+  source_key: "condition"
+  source_value: "control"
   group_keys: ["batch"]
   always_train_keys: ["control"]
   test_fraction: 0.2
+  val_fraction: 0.1
   key: null
   test: []
   val: []

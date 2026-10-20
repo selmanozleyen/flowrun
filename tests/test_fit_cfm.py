@@ -142,8 +142,8 @@ _OVERRIDES_SPLITTER: list[tuple[str, list[str]]] = [
             "splitter",
             group_keys=["source_split"],
             always_train_keys=[],
-            control_key="drugA",
-            control_value="control",
+            source_key="drugA",
+            source_value="control",
         ),
     ),
 ]
@@ -613,6 +613,7 @@ def _run_and_assert(
 
     run_dir = tmp_path / "run"
     assert (run_dir / "config.json").is_file()
+    assert (run_dir / "pca.zarr").is_dir() == ("pca.n_comps=5" in overrides_list)
     assert (run_dir / "module" / "model.safetensors").is_file()
 
 
@@ -735,9 +736,10 @@ def test_holdout_split_with_pca(tmp_path: Path, target_adata_path: Path) -> None
     _run_and_assert(
         overrides_list=[
             *combine(pair="one_cat_paired"),
-            "splitter.type=holdout",
+            "splitter.type=shared_source_holdout",
             "splitter.key=source_split",
             "splitter.test=[source_split0]",
+            "splitter.val=[source_split1]",
             "pca.n_comps=5",
         ],
         tmp_path=tmp_path,

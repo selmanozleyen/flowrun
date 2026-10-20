@@ -84,6 +84,7 @@ Outputs
   ``trainer.callback_metrics`` (``+inf`` if validation never ran).
 """
 
+from pathlib import Path
 from typing import Any
 
 import anndata as ad
@@ -147,12 +148,24 @@ def resolve_omegaconf_to_dictionary(conf_dict: dict[str, Any] | None | DictConfi
     return out_dict
 
 
+def enable_zarrs() -> None:
+    """Use the ``zarrs`` (Rust) codec pipeline for all zarr I/O, and fail rather than fall back to the slow one."""
+    import zarr
+    from zarr.registry import get_pipeline_class
+
+    zarr.config.set({"codec_pipeline.path": "zarrs.ZarrsCodecPipeline"})
+    cls = get_pipeline_class()
+    if f"{cls.__module__}.{cls.__name__}" != "zarrs.ZarrsCodecPipeline":
+        raise RuntimeError(f"zarrs codec pipeline did not load (active: {cls.__module__}.{cls.__name__}).")
+
+
 @hydra.main(config_path="configs", config_name="fit_cfm", version_base=None)
 def main(config: DictConfig) -> float:
     """Main entrypoint for CFM training."""
     # Seed everything with lightning
     # This is the master seeding, and it will be also saved to the run
     # for further reproducibility.
+    enable_zarrs()
     logger.info(f"Setting the global run seed to {config.run.method_seed}")
     seed_everything(seed=config.run.method_seed, workers=True)
 
@@ -169,25 +182,32 @@ def main(config: DictConfig) -> float:
     splitter = config.splitter
     if splitter.split_key in adata.obs.columns:
         raise ValueError(f"adata.obs already has a {splitter.split_key!r} column; drop it to re-split.")
-    if splitter.type == "combination":
-        labels = split.combination(
+    is_source = (
+        adata.obs[splitter.source_key].astype(str).to_numpy() == str(splitter.source_value)
+        if splitter.source_key is not None
+        else np.zeros(adata.n_obs, dtype=bool)
+    )
+    if splitter.type == "shared_source_combination":
+        labels = split.shared_source_combination(
             adata.obs,
             splitter.group_keys,
+            is_source=is_source,
             always_train_keys=splitter.always_train_keys,
-            control_key=splitter.control_key,
-            control_value=splitter.control_value,
             test_fraction=splitter.test_fraction,
+            val_fraction=splitter.val_fraction,
             seed=config.run.splitter_seed,
         )
-    elif splitter.type == "holdout":
-        labels = split.holdout(
-            adata.obs, splitter.key, test=splitter.test, val=splitter.val, control_key=splitter.control_key, control_value=splitter.control_value
+    elif splitter.type == "shared_source_holdout":
+        labels = split.shared_source_holdout(
+            adata.obs, splitter.key, is_source=is_source, test=splitter.test, val=splitter.val
         )
     else:
-        raise ValueError(f"Unknown splitter.type {splitter.type!r}; use 'combination' or 'holdout'.")
+        raise ValueError(
+            f"Unknown splitter.type {splitter.type!r}; use 'shared_source_combination' or 'shared_source_holdout'."
+        )
     adata.obs[splitter.split_key] = labels
 
-    # PCA is fitted on the training split only, so held-out cells never shape the space.
+    # PCA is fitted on the training split only (sources included), so held-out cells never shape the space.
     if config.pca.n_comps is not None:
         train_mask = (adata.obs[splitter.split_key] == "train").to_numpy()
         pca(
@@ -554,8 +574,19 @@ def main(config: DictConfig) -> float:
     logger.info(f"Saving model {config.save.run_dir}.")
     model.save_pretrained(config.save.run_dir, overwrite=config.run.allow_overwrite)
 
+    if config.pca.n_comps is not None:
+        # The PCA as an AnnData without ``X``: obs/var names map it to the original cells and genes, and
+        # ``X_pca @ varm["PCs"].T + var["pca_mean"]`` maps predictions back to gene space.
+        ad.AnnData(
+            obs=adata.obs[[splitter.split_key]],
+            var=adata.var[["pca_mean"]],
+            obsm={config.datamanager.sample_rep: adata.obsm[config.datamanager.sample_rep]},
+            varm={"PCs": adata.varm["PCs"]},
+            uns={"pca": adata.uns["pca"]},
+        ).write_zarr(Path(config.save.run_dir) / "pca.zarr")
+
     # Capture the edist from the latest validation step.
-    val_edist_key = f"{datamodule.val_names[0]}/{EDIST_KEY}"  # e.g. "val/edist"
+    val_edist_key = f"val/{EDIST_KEY}"
     last_val_edist = trainer.callback_metrics.get(val_edist_key, float("inf"))
     returned_metric = float(last_val_edist)
     logger.info(f"Finishing the run with edist of {returned_metric:.4f}")
