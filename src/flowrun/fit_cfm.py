@@ -175,7 +175,8 @@ def main(config: DictConfig) -> float:
     # with ``anndata`` is performed, and no other transformation is
     # applied to the data.
     logger.info(f"Reading target adata from {config.paths.target_adata}.")
-    adata = ad.read_h5ad(config.paths.target_adata)
+    path = Path(config.paths.target_adata)
+    adata = ad.read_zarr(path) if path.suffix == ".zarr" else ad.read_h5ad(path)
     logger.info(f"Target adata read: {adata}")
 
     # Split: one label per row in ``obs[splitter.split_key]``, read back as ``split_by``.

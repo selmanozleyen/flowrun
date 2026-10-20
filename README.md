@@ -12,7 +12,7 @@ uv sync --extra test
 ## Train
 
 ```bash
-uv run flowrun-fit-cfm paths.target_adata=/path/to/data.h5ad save.run_dir=runs/first
+uv run flowrun-fit-cfm paths.target_adata=/path/to/data.zarr save.run_dir=runs/first
 ```
 
 Every key and its default lives in `src/flowrun/configs/fit_cfm.yaml`. The run is saved with

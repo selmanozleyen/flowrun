@@ -23,13 +23,13 @@ hydra:
     chdir: false
 
 # -----------------------------------------------------------------------------
-# Input data paths (read by `read_adatas`)
+# Input data paths
 #
-# target_adata:  path to the `.h5ad` used for training. Controls are picked from it by the
+# target_adata:  the AnnData used for training: a `.zarr` store, or an `.h5ad` file. Controls are picked from it by the
 #                datamanager's `control_values_dict` (or `matched_pairs`).
 # -----------------------------------------------------------------------------
 paths:
-  target_adata: "/abs/path/to/target.h5ad"
+  target_adata: "/abs/path/to/target.zarr"
 
 # -----------------------------------------------------------------------------
 # Probability path (`get_probability_path_cfg`)

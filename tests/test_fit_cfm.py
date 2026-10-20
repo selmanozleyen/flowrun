@@ -69,6 +69,7 @@ Notes
 import math
 from pathlib import Path
 
+import anndata as ad
 import numpy as np
 import pytest
 from anndata import AnnData
@@ -731,8 +732,10 @@ class TestFitCFMRunsAxes:
         )
 
 
-def test_holdout_split_with_pca(tmp_path: Path, target_adata_path: Path) -> None:
-    """Hold out whole values of one column, and train on a PCA fitted on the training split."""
+def test_holdout_split_with_pca_from_zarr(tmp_path: Path, target_adata_path: Path) -> None:
+    """Read a zarr input, hold out whole values of one column, and train on a PCA fitted on the training split."""
+    zarr_path = tmp_path / "target.zarr"
+    ad.read_h5ad(target_adata_path).write_zarr(zarr_path)
     _run_and_assert(
         overrides_list=[
             *combine(pair="one_cat_paired"),
@@ -743,5 +746,5 @@ def test_holdout_split_with_pca(tmp_path: Path, target_adata_path: Path) -> None
             "pca.n_comps=5",
         ],
         tmp_path=tmp_path,
-        target_adata_path=target_adata_path,
+        target_adata_path=zarr_path,
     )
