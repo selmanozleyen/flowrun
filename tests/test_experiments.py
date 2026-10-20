@@ -53,3 +53,17 @@ def test_cellflow_smoke_runs_on_cellflow_shaped_zarr(tmp_path: Path):
     # A second run on the same file reuses its split, whatever the seed; only the PCA needs an explicit overwrite.
     second = run("run.splitter_seed=7", "pca.overwrite=true", "run.allow_overwrite=true")
     assert second.obs["split"].equals(first.obs["split"])
+
+
+def test_zarr_input_reads_only_what_the_run_uses(tmp_path: Path):
+    obs = {"drug1": ["control", "a"], "drug2": ["control", "b"], "cell_line": ["x", "x"], "unused": ["u", "v"]}
+    uns = {"drug": {"a": np.ones(2)}, "cell_line": {"x": np.ones(2)}, "big_unused_table": np.ones(1000)}
+    ad.AnnData(np.ones((2, 3), dtype=np.float32), obs=obs, uns=uns, obsm={"X_other": np.ones((2, 2))}).write_zarr(
+        tmp_path / "d.zarr"
+    )
+    with initialize_config_dir(config_dir=str(Path(fit_cfm.__file__).parent / "configs"), version_base=None):
+        cfg = compose(config_name="fit_cfm", overrides=["+experiment=cellflow"])
+    adata = fit_cfm.read_zarr_input(tmp_path / "d.zarr", cfg)
+    assert set(adata.obs.columns) == {"drug1", "drug2", "cell_line"}
+    assert set(adata.uns) == {"drug", "cell_line"}
+    assert not isinstance(adata.obsm["X_other"], np.ndarray)  # left on disk

@@ -160,14 +160,32 @@ def enable_zarrs() -> None:
         raise RuntimeError(f"zarrs codec pipeline did not load (active: {cls.__module__}.{cls.__name__}).")
 
 
-def read_zarr_backed_x(path: Path) -> ad.AnnData:
-    """Read a zarr AnnData with ``X`` left on disk; everything else is read into memory."""
+def read_zarr_input(path: Path, config: DictConfig) -> ad.AnnData:
+    """Read only what the run uses from a zarr AnnData: the obs columns and uns tables the schema and the splitter
+    name, with ``X`` and every ``obsm`` rep left on disk (backed, so unread ones cost nothing)."""
     import zarr
+    from scfit.data._io import load_backed_adata
 
+    dm, splitter = config.datamanager, config.splitter
+    cols = {
+        *dm.groups,
+        *(c for level in dm.categorical_conditions.values() for c in level),
+        *dm.target_categorical_covs_dict,
+        dm.condition_state_key,
+        dm.split_by,
+        splitter.source_key,
+        splitter.key,
+        *splitter.group_keys,
+    }
+    uns = {*dm.categorical_reps.values(), *dm.groups_reps.values()}
     group = zarr.open_group(path, mode="r")
-    elems = {k: ad.io.read_elem(group[k]) for k in ("obs", "var", "obsm", "varm", "obsp", "uns") if k in group}
-    x = group["X"]
-    return ad.AnnData(X=ad.io.sparse_dataset(x) if isinstance(x, zarr.Group) else x, **elems)
+    keys = ["X", *(f"obsm/{k}" for k in group.get("obsm", {}))]
+    return load_backed_adata(
+        group,
+        keys=keys,
+        cols=sorted(c for c in cols if c is not None and c in group["obs"]),
+        uns=sorted(k for k in uns if k in group.get("uns", {})),
+    )
 
 
 def split_labels(obs, splitter: DictConfig, *, seed: int):
@@ -211,7 +229,7 @@ def main(config: DictConfig) -> float:
     # applied to the data.
     logger.info(f"Reading target adata from {config.paths.target_adata}.")
     path = Path(config.paths.target_adata)
-    adata = read_zarr_backed_x(path) if path.suffix == ".zarr" else ad.read_h5ad(path)
+    adata = read_zarr_input(path, config) if path.suffix == ".zarr" else ad.read_h5ad(path)
     logger.info(f"Target adata read: {adata}")
 
     # Split: one label per row in ``obs[splitter.split_key]``, read back as ``split_by``. A split already in the
