@@ -10,8 +10,8 @@ Pipeline (in the order ``main`` executes them)
 ----------------------------------------------
 1. Seed everything from ``config.run.method_seed`` (``lightning.seed_everything``).
 2. Load AnnData from disk (``read_adatas``; paths in ``config.paths``).
-3. Build a ``CombinationSplitter`` from ``config.splitter`` (control/train/val/test
-   splits) and a ``FlowDataModule`` from ``config.datamanager`` + ``config.datamodule``.
+3. Write the split column from ``config.splitter`` (``flowrun.split``: control/train/val/test
+   labels) and a ``FlowDataModule`` from ``config.datamanager`` + ``config.datamodule``.
 4. Build the MLP velocity field (``MLPVelocityConfig`` from ``config.module``).
 5. Build the base training method (``CFMTrainingConfig``), wrap it in a
    ``MatchedTrainingConfig`` that pairs source/target samples according to
@@ -23,17 +23,14 @@ Pipeline (in the order ``main`` executes them)
    (``EnergyDistance``, ``MaximumMeanDiscrepancy``) from ``config.metrics``.
 7. Build a ``TrainingPlan`` (the ``LightningModule`` wrapper) from
    ``config.training_plan``, wiring together the training/inference methods,
-   metrics, optimizer, and transforms.
+   metrics and optimizer.
 8. Configure ``WandbLogger`` + ``CSVLogger``, callbacks (``EarlyStopping``,
    ``GradientAccumulationScheduler``, ``LearningRateMonitor``, ``ModelCheckpoint``),
    and the ``lightning.pytorch.Trainer``.
 9. ``trainer.fit(...)``.
 10. Persist the model via ``Model.save_pretrained`` (writes ``config.json`` +
     ``module/model.safetensors``). Training checkpoints are written separately by
-    the ``ModelCheckpoint`` callback during ``trainer.fit``. The fitted transform
-    is persisted separately (``transform.json`` + ``transform_params.npz``) via
-    ``save_transform``, since ``ModelConfig`` does not yet carry a ``transform``
-    field. How the run went (optimizer, seeds, batch size) is this config's, not
+    the ``ModelCheckpoint`` callback during ``trainer.fit``. How the run went (optimizer, seeds, batch size) is this config's, not
     the model's.
 11. Return the last validation ``edist`` from ``trainer.callback_metrics``
     (fallback: ``+inf``) for sweeps / shell exit codes. The key is
@@ -58,9 +55,8 @@ Key concepts
   ``time_sampler`` and ``noise_sampler`` in the config are ``SamplerConfig``
   objects (portable — the run's spec serializes them). See
   ``sckitflow.core._samplers``.
-- **Transform**: optional pre-processing of the ``sample_rep`` (or ``.X`` when
-  ``sample_rep is None``), fitted on the training split only. Configured via
-  ``config.transform``. Persisted to ``run_dir`` alongside the run.
+- **PCA**: optional, fitted on the training split only and written to
+  ``obsm[sample_rep]``. Configured via ``config.pca``; see ``flowrun.pca``.
 - **Inference**: integrates the learned ODE from t=0 to t=1 with ``torchdiffeq``,
   configured via ``ODEInferenceConfig``.
 
@@ -84,11 +80,6 @@ Outputs
   ``config.json`` — the portable ``ModelConfig`` — and ``module/model.safetensors``).
   Reload it with ``sckitflow.Model.from_pretrained(run_dir, adata)`` for
   **inference**.
-- Fitted transform: ``config.save.run_dir`` (via ``save_transform``; contains
-  ``transform.json`` — the portable ``TransformConfig`` spec — and
-  ``transform_params.npz`` — the fitted numpy arrays). Loadable via
-  ``flowrun.preprocessing.transforms.load_transform`` for applying the same
-  transform in a different process.
 - Return value: last ``<val_name>/edist`` from
   ``trainer.callback_metrics`` (``+inf`` if validation never ran).
 """
@@ -97,6 +88,8 @@ from typing import Any
 
 import anndata as ad
 import hydra
+import numpy as np
+import torch
 from lightning.pytorch import Trainer, seed_everything
 from lightning.pytorch.callbacks import (
     EarlyStopping,
@@ -104,28 +97,23 @@ from lightning.pytorch.callbacks import (
     LearningRateMonitor,
     ModelCheckpoint,
 )
-from lightning.pytorch.loggers import WandbLogger, CSVLogger
-import numpy as np
+from lightning.pytorch.loggers import CSVLogger, WandbLogger
 from omegaconf import DictConfig, OmegaConf
-from scipy.sparse import issparse
-
-import torch
-
 from sckitflow import (
+    IsotropicGaussianNoiseSamplerConfig,
     Model,
     ModelConfig,
-    get_logger,
-    IsotropicGaussianNoiseSamplerConfig,
     UniformTimeSamplerConfig,
+    get_logger,
 )
 from sckitflow.core.coupling import (
-    IndependentCouplingConfig,
     ExactCouplingConfig,
-    SinkhornCouplingConfig,
-    PartialCouplingConfig,
-    UnbalancedCouplingConfig,
-    GromovWassersteinCouplingConfig,
     FusedGromovWassersteinCouplingConfig,
+    GromovWassersteinCouplingConfig,
+    IndependentCouplingConfig,
+    PartialCouplingConfig,
+    SinkhornCouplingConfig,
+    UnbalancedCouplingConfig,
 )
 from sckitflow.core.methods import CFMTrainingConfig, MatchedTrainingConfig, ODEInferenceConfig
 from sckitflow.core.metrics import EnergyDistance, MaximumMeanDiscrepancy
@@ -136,22 +124,16 @@ from sckitflow.core.probability_paths import (
     SchrodingerBridgeProbabilityPathConfig,
     VariancePreservingDiracProbabilityPathConfig,
 )
-from sckitflow.data import CombinationSplitterConfig, DataManagerConfig, FlowDataModule
-from flowrun.preprocessing.transforms import (
-    IdentityTransformConfig,
-    PCATransformConfig,
-    WhiteningTransformConfig,
-    ZScoreTransformConfig,
-    save_transform,
-)
+from sckitflow.data import DataManagerConfig, FlowDataModule
 from sckitflow.trainer import TrainingPlan
 
+from flowrun import split
+from flowrun.pca import pca
 
 logger = get_logger(__name__)
 
 EDIST_KEY = "edist"
 MMD_KEY = "mmd"
-ORIGINAL_REP_KEY = "original_rep"
 
 
 def resolve_omegaconf_to_dictionary(conf_dict: dict[str, Any] | None | DictConfig) -> dict[str, Any]:
@@ -183,91 +165,39 @@ def main(config: DictConfig) -> float:
     adata = ad.read_h5ad(config.paths.target_adata)
     logger.info(f"Target adata read: {adata}")
 
-    # Prepare splitter for training.
-    # The splitter defines control, train, validation and test splits
-    # and writes a column in the input ``ad.AnnData``. We should always
-    # fit any data transformation only on the training cases.
-    logger.info(f"Initializing splitter with seed {config.run.splitter_seed}.")
-    splitter_rng = np.random.default_rng(config.run.splitter_seed)
-    splitter_cfg = CombinationSplitterConfig(
-        split_key=config.splitter.split_key,
-        group_keys=config.splitter.group_keys,
-        always_train_keys=config.splitter.always_train_keys,
-        control_key=config.splitter.control_key,
-        control_value=config.splitter.control_value,
-        test_fraction=config.splitter.test_fraction,
-        train_label=config.splitter.train_label,
-        test_label=config.splitter.test_label,
-        control_label=config.splitter.control_label,
-    )
-    splitter = splitter_cfg.build(rng=splitter_rng)
-
-    # Split the data upfront. This is required for optional transformations
-    # on the data -- their parameters should be inferred exclusively from
-    # the training data, therefore we need to explicitly split the input
-    # data to avoid information leakage.
-    adata = splitter.split(adata, copy=False)
-
-    # Subsetting the data to train only, so that we can then infer the
-    # parameters for the required transformations without leaking information
-    # from the validation and test sets.
-    train_mask = adata.obs[config.splitter.split_key] == config.splitter.train_label
-    training_adata = adata[train_mask]
-
-    # Applying transformations to the data. First, we need to infer the
-    # parameters from the training data, then we have to transform all of the
-    # data using such parameters.
-    # TODO: Consider how to make the transformations persistent.
-    if config.transform.name == "identity":
-        transform_cfg = IdentityTransformConfig()
-    elif config.transform.name == "pca":
-        transform_cfg = PCATransformConfig(n_components=config.transform.n_components)
-    elif config.transform.name == "zscore":
-        transform_cfg = ZScoreTransformConfig(epsilon=config.transform.epsilon)
-    elif config.transform.name == "whitening":
-        transform_cfg = WhiteningTransformConfig(
-            method=config.transform.method,
-            epsilon=config.transform.epsilon,
+    # Split: one label per row in ``obs[splitter.split_key]``, read back as ``split_by``.
+    splitter = config.splitter
+    if splitter.split_key in adata.obs.columns:
+        raise ValueError(f"adata.obs already has a {splitter.split_key!r} column; drop it to re-split.")
+    if splitter.type == "combination":
+        labels = split.combination(
+            adata.obs,
+            splitter.group_keys,
+            always_train_keys=splitter.always_train_keys,
+            control_key=splitter.control_key,
+            control_value=splitter.control_value,
+            test_fraction=splitter.test_fraction,
+            seed=config.run.splitter_seed,
+        )
+    elif splitter.type == "holdout":
+        labels = split.holdout(
+            adata.obs, splitter.key, test=splitter.test, val=splitter.val, control_key=splitter.control_key, control_value=splitter.control_value
         )
     else:
-        raise ValueError(f"Invalid transform {config.transform.name}")
-    transform = transform_cfg.build()
+        raise ValueError(f"Unknown splitter.type {splitter.type!r}; use 'combination' or 'holdout'.")
+    adata.obs[splitter.split_key] = labels
 
-    # Fitting the transformation parameters on the training split only.
-    transform = transform.fit_adata(
-        training_adata,
-        obsm=config.datamanager.sample_rep,
-    )
-
-    # Now we need to store the original representation in a new key, so that
-    # we can retrieve it back later after transformation.
-    if config.datamanager.sample_rep is not None:
-        if config.datamanager.sample_rep not in adata.obsm_keys():
-            raise ValueError(
-                f"Representation {config.datamanager.sample_rep!r} not found in "
-                f"adata.obsm; available keys: {list(adata.obsm_keys())}."
-            )
-        X_original_rep = adata.obsm[config.datamanager.sample_rep]
-    else:
-        X_original_rep = adata.X
-
-    # ``obsm`` requires dense arrays, and every transform expects a 2-D
-    # ``np.ndarray``. Densify once here so both the persistence call and the
-    # transform application see a consistent representation.
-    if issparse(X_original_rep):
-        X_original_rep = X_original_rep.toarray()
-    else:
-        X_original_rep = np.asarray(X_original_rep)
-    adata.obsm[ORIGINAL_REP_KEY] = X_original_rep
-
-    # We then apply the transformation and store the resulting transformed
-    # values back where they came from, so that they can still be read from
-    # the rest of the script.
-    X_transformed = transform.transform(X_original_rep)
-    if config.datamanager.sample_rep is not None:
-        adata.obsm[config.datamanager.sample_rep] = X_transformed
-    else:
-        adata.X = X_transformed
+    # PCA is fitted on the training split only, so held-out cells never shape the space.
+    if config.pca.n_comps is not None:
+        train_mask = (adata.obs[splitter.split_key] == "train").to_numpy()
+        pca(
+            adata,
+            config.pca.n_comps,
+            train_mask=train_mask,
+            n_hvg=config.pca.n_hvg,
+            hvg_flavor=config.pca.hvg_flavor,
+            key_added=config.datamanager.sample_rep,
+        )
 
     # Prepare data manager.
     # The ``DataManager`` is never materialized directly here: it lives
@@ -623,13 +553,6 @@ def main(config: DictConfig) -> float:
     model = Model(model_cfg, datamodule.dm, datamodule.data_dims, module, training_method, inference_method)
     logger.info(f"Saving model {config.save.run_dir}.")
     model.save_pretrained(config.save.run_dir, overwrite=config.run.allow_overwrite)
-
-    # Persist the fitted transform alongside the model. Kept separate from
-    # ``save_pretrained`` because ``ModelConfig`` does not yet carry a ``transform``
-    # field — see ``save_transform``'s docstring in
-    # ``flowrun.preprocessing.transforms._persistence``.
-    logger.info(f"Saving fitted transform to {config.save.run_dir}.")
-    save_transform(config.save.run_dir, transform_cfg, transform)
 
     # Capture the edist from the latest validation step.
     val_edist_key = f"{datamodule.val_names[0]}/{EDIST_KEY}"  # e.g. "val/edist"

@@ -59,26 +59,29 @@ noise_sampler:
   name: "isotropic_gaussian"
 
 # -----------------------------------------------------------------------------
-# Splitter (`CombinationSplitterConfig`)
+# Splitter (`flowrun.split`)
 #
+# Writes "train" / "val" / "test" / "control" into `obs[split_key]`.
+#
+#   type              "combination": hold out whole `group_keys` combinations
+#                     "holdout": hold out chosen values of one obs column `key`
 #   split_key         obs column that receives the split label
-#   group_keys        obs columns forming split groups (e.g. batch IDs)
-#   always_train_keys groups that must appear in the training split
 #   control_key       obs column identifying the control condition
-#   control_value     value in `control_key` marking control cells
-#   test_fraction     fraction held out for test
-#   *_label           string labels written into the split column
+#   control_value     value in `control_key` marking control cells (never split)
+#   combination:  group_keys, always_train_keys (keep each value in train), test_fraction
+#   holdout:      key, test (values held out for test), val (values held out for validation)
 # -----------------------------------------------------------------------------
 splitter:
+  type: "combination"
   split_key: "split"
-  group_keys: ["batch"]
-  always_train_keys: ["control"]
   control_key: "condition"
   control_value: "control"
+  group_keys: ["batch"]
+  always_train_keys: ["control"]
   test_fraction: 0.2
-  train_label: "train"
-  test_label: "test"
-  control_label: "control"
+  key: null
+  test: []
+  val: []
 
 # -----------------------------------------------------------------------------
 # DataManager (`DataManagerConfig`)
@@ -129,25 +132,17 @@ datamodule:
   loader_kwargs: {}
 
 # -----------------------------------------------------------------------------
-# Transform (`get_transform_cfg`)
+# PCA (`flowrun.pca.pca`)
 #
-# Applies a preprocessing transform to `datamanager.sample_rep` (or `.X` when
-# `sample_rep is null`). Fitted **on the training split only** to avoid leakage,
-# then applied to the full dataset. The pre-transform matrix is preserved under
-# `adata.obsm["original_rep"]`. The fitted transform is persisted to
-# `save.run_dir` as `transform.json` + `transform_params.npz`.
-#
-# `name` must be one of:
-#   identity   → no-op; anything goes through unchanged
-#   pca        → PCATransformConfig(n_components=...)
-#   zscore     → ZScoreTransformConfig(epsilon=...)
-#   whitening  → WhiteningTransformConfig(method=..., epsilon=...)
+# Fitted on the training split only, then every cell is projected into
+# `obsm[datamanager.sample_rep]`. The basis is stored in the AnnData
+# (`varm["PCs"]`, `var["pca_mean"]`). `n_comps: null` skips it and trains on an
+# existing `sample_rep`.
 # -----------------------------------------------------------------------------
-transform:
-  name: "identity"
-  n_components: null
-  epsilon: 1.0e-8
-  method: "zca"
+pca:
+  n_comps: null
+  n_hvg: null
+  hvg_flavor: "seurat"
 
 # -----------------------------------------------------------------------------
 # Velocity field network (`MLPVelocityConfig`)
@@ -407,7 +402,7 @@ run:
   allow_overwrite: false
 
 # -----------------------------------------------------------------------------
-# Saved-model directory (`Model.save_pretrained` + `save_transform`)
+# Saved-model directory (`Model.save_pretrained`)
 # -----------------------------------------------------------------------------
 save:
   run_dir: "./runs/cfm_run"

@@ -1,1 +1,1 @@
-"""Pipeline steps around sckitflow: data transforms and the training entry point."""
+"""Pipeline steps around sckitflow: PCA and the training entry point."""

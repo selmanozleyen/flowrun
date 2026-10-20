@@ -728,3 +728,18 @@ class TestFitCFMRunsAxes:
             tmp_path=tmp_path,
             target_adata_path=target_adata_path,
         )
+
+
+def test_holdout_split_with_pca(tmp_path: Path, target_adata_path: Path) -> None:
+    """Hold out whole values of one column, and train on a PCA fitted on the training split."""
+    _run_and_assert(
+        overrides_list=[
+            *combine(pair="one_cat_paired"),
+            "splitter.type=holdout",
+            "splitter.key=source_split",
+            "splitter.test=[source_split0]",
+            "pca.n_comps=5",
+        ],
+        tmp_path=tmp_path,
+        target_adata_path=target_adata_path,
+    )

@@ -4,7 +4,6 @@ import numpy as np
 import pandas as pd
 import pytest
 from anndata import AnnData
-
 from sckitflow.data.sim._dummy_adata import get_dummy_adata
 
 

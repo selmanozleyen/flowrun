@@ -1,6 +1,6 @@
 # flowrun
 
-Pipeline steps around [sckitflow](https://github.com/theislab/sckitflow): data transforms and a
+Pipeline steps around [sckitflow](https://github.com/theislab/sckitflow): split and PCA steps and a
 Hydra entry point that trains a flow-matching model from one YAML.
 
 ## Install
@@ -20,6 +20,7 @@ Every key and its default lives in `src/flowrun/configs/fit_cfm.yaml`. The run i
 
 ## Layout
 
-- `flowrun.preprocessing.transforms`: PCA, z-score and whitening, fitted on the training split and
-  saved next to the run.
+- `flowrun.split`: split labels written to an obs column; `combination` holds out condition
+  combinations, `holdout` holds out chosen values of one column (e.g. cell lines).
+- `flowrun.pca`: PCA fitted on the training split, reading only those rows; the basis is stored in the AnnData.
 - `flowrun.fit_cfm`: the training entry point.
