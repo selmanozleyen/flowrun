@@ -1,24 +1,23 @@
-"""PCA fitted on the training cells, written into the AnnData.
+"""PCA fitted on the training cells with :func:`scanpy.pp.pca` on dask, written into the AnnData.
 
-Based on cf-train's ``myapp-pca``: optionally pick HVGs (scanpy), accumulate the gene covariance
-``XᵀX`` over the training rows in chunks, eigendecompose it, then project every cell in chunks.
-Only the training rows are read for the fit, chunk by chunk, so a backed AnnData
-(``anndata.read_h5ad(path, backed="r")``) never loads held-out cells. The fitted basis is stored in the
-AnnData, so predictions map back to genes with ``X_pca @ adata.varm["PCs"].T + adata.var["pca_mean"]``.
+``X`` is handled as a dask array chunked by rows (a backed zarr ``X`` is wrapped without loading it), so the fit
+reads only the training rows' chunks: HVGs and the basis come from those rows, then every row is projected into that basis.
+Predictions map back to genes with ``X_pca @ adata.varm["PCs"].T + adata.var["pca_mean"]``.
 
-TODO(scale): the cost grows with genes, not cells -- the covariance is genes x genes and gets
-eigendecomposed, so ``n_hvg=None`` on ~20k genes needs ~3 GB and minutes of ``eigh``. For larger data:
-default to HVGs (as cf-train does), multiply chunks in float32 while accumulating in float64 (~30% faster),
-subsample for HVG selection instead of loading every training row, add cf-train's cupy GPU path, and read
-the input backed so held-out rows never leave disk.
+TODO(scale): the cost grows with genes, not cells -- scanpy's dask PCA (``covariance_eigh``) builds a
+genes x genes covariance, so ``n_hvg=None`` on ~20k genes needs ~3 GB and minutes of ``eigh``. For larger data:
+default to HVGs (as cf-train does), and add a GPU path (rapids-singlecell, or cf-train's cupy loop).
 """
 
 from __future__ import annotations
 
+import anndata as ad
+import dask.array as da
 import numpy as np
-import scipy.sparse as sp
+import scanpy as sc
+import zarr
 from anndata import AnnData
-from scipy.sparse import issparse
+from fast_array_utils import stats
 
 
 def pca(
@@ -36,7 +35,7 @@ def pca(
     Parameters
     ----------
     adata
-        Cells by genes; ``X`` may be dense, sparse or backed.
+        Cells by genes; ``X`` may be in memory, backed on disk (zarr), or dask.
     n_comps
         Number of components.
     train_mask
@@ -45,54 +44,39 @@ def pca(
     n_hvg
         Restrict the fit to this many highly variable genes; ``None`` uses every gene.
     hvg_flavor
-        Flavor for :func:`scanpy.pp.highly_variable_genes`. ``"seurat"`` expects log-normalised data;
-        use ``"seurat_v3"`` for raw counts (needs ``scikit-misc``).
+        Flavor for :func:`scanpy.pp.highly_variable_genes`. ``"seurat"`` expects log-normalised data.
     key_added
         Key of the projection in ``obsm``.
     chunk_size
-        Rows per chunk when accumulating the covariance and projecting.
+        Rows per dask chunk when ``X`` is not dask already.
 
     Writes ``obsm[key_added]``, ``varm["PCs"]`` (zero for genes outside the fit), ``var["pca_mean"]``
-    and ``uns["pca"]["variance"]``.
+    and ``uns["pca"]``.
     """
+    X = adata.X
+    if isinstance(X, ad.abc.CSRDataset):  # backed sparse: read lazily, chunk by chunk
+        X = ad.experimental.read_elem_lazy(X.group, chunks=(chunk_size, adata.n_vars))
+    elif isinstance(X, zarr.Array):  # backed dense
+        X = da.from_zarr(X, chunks=(chunk_size, -1))
+    elif not isinstance(X, da.Array):
+        X = da.from_array(X, chunks=(chunk_size, -1), asarray=False)
+    X = X.rechunk({1: -1})  # scanpy's dask PCA wants whole rows per chunk
     rows = np.flatnonzero(train_mask) if train_mask is not None else np.arange(adata.n_obs)
-    genes = np.arange(adata.n_vars)
+
+    fit = AnnData(X[rows])
     if n_hvg is not None:
-        import scanpy as sc
+        sc.pp.highly_variable_genes(fit, n_top_genes=n_hvg, flavor=hvg_flavor)
+    sc.pp.pca(fit, n_comps, mask_var="highly_variable" if n_hvg is not None else None, svd_solver="covariance_eigh")
+    pcs = fit.varm["PCs"].astype(np.float32)
+    mean = np.asarray(da.compute(stats.mean(fit.X, axis=0))[0], dtype=np.float32).ravel()
 
-        # ponytail: HVGs see every training row at once; subsample like cf-train if that stops fitting in memory
-        train = AnnData(_stack(adata.X[rows[i : i + chunk_size]] for i in range(0, rows.size, chunk_size)))
-        hvg = sc.pp.highly_variable_genes(train, n_top_genes=n_hvg, flavor=hvg_flavor, inplace=False)
-        genes = np.flatnonzero(hvg["highly_variable"].to_numpy())
-
-    gram = np.zeros((genes.size, genes.size))
-    total = np.zeros(genes.size)
-    for i in range(0, rows.size, chunk_size):
-        X = _dense(adata.X[rows[i : i + chunk_size]][:, genes])
-        gram += X.T @ X
-        total += X.sum(0)
-    mean = total / rows.size
-    variance, vectors = np.linalg.eigh(gram / rows.size - np.outer(mean, mean))  # ascending
-    pcs = vectors[:, ::-1][:, :n_comps]
-
-    out = np.empty((adata.n_obs, pcs.shape[1]), dtype=np.float32)
     shift = mean @ pcs
-    for i in range(0, adata.n_obs, chunk_size):
-        out[i : i + chunk_size] = _dense(adata.X[i : i + chunk_size][:, genes]) @ pcs - shift
-
-    adata.obsm[key_added] = out
-    adata.varm["PCs"] = np.zeros((adata.n_vars, pcs.shape[1]), dtype=np.float32)
-    adata.varm["PCs"][genes] = pcs
-    full_mean = np.zeros(adata.n_vars, dtype=np.float32)
-    full_mean[genes] = mean
-    adata.var["pca_mean"] = full_mean
-    adata.uns["pca"] = {"variance": variance[::-1][:n_comps].astype(np.float32)}
-
-
-def _stack(chunks):
-    chunks = list(chunks)
-    return sp.vstack(chunks, format="csr") if issparse(chunks[0]) else np.vstack(chunks)
-
-
-def _dense(X) -> np.ndarray:
-    return np.asarray(X.toarray() if issparse(X) else X, dtype=np.float64)
+    projected = X.map_blocks(
+        lambda block: np.asarray(block @ pcs, dtype=np.float32) - shift,
+        dtype=np.float32,
+        chunks=(X.chunks[0], (n_comps,)),
+    )
+    adata.obsm[key_added] = projected.compute()
+    adata.varm["PCs"] = pcs
+    adata.var["pca_mean"] = mean
+    adata.uns["pca"] = {k: np.asarray(da.compute(v)[0]) for k, v in fit.uns["pca"].items() if k != "params"}

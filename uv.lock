@@ -713,6 +713,8 @@ version = "0.0.0"
 source = { editable = "." }
 dependencies = [
     { name = "anndata" },
+    { name = "dask", extra = ["array"] },
+    { name = "fast-array-utils" },
     { name = "hydra-core" },
     { name = "numpy" },
     { name = "omegaconf" },
@@ -732,7 +734,9 @@ test = [
 
 [package.metadata]
 requires-dist = [
-    { name = "anndata" },
+    { name = "anndata", specifier = ">=0.12" },
+    { name = "dask", extras = ["array"] },
+    { name = "fast-array-utils" },
     { name = "hydra-core", specifier = ">=1.3" },
     { name = "numpy" },
     { name = "omegaconf" },

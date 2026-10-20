@@ -1,6 +1,7 @@
 import anndata as ad
 import numpy as np
 import scipy.sparse as sp
+import zarr
 from anndata import AnnData
 from sklearn.decomposition import PCA
 
@@ -29,13 +30,14 @@ def test_full_rank_round_trips():
     np.testing.assert_allclose(back, X, atol=1e-4)
 
 
-def test_backed_fit_reads_only_training_rows(tmp_path):
+def test_backed_sparse_zarr_fit_on_training_rows(tmp_path):
     rng = np.random.default_rng(2)
     X = rng.normal(size=(120, 8)).astype(np.float32)
     train = np.arange(120) % 3 != 0
-    AnnData(sp.csr_matrix(X)).write_h5ad(tmp_path / "a.h5ad")
-    backed = ad.read_h5ad(tmp_path / "a.h5ad", backed="r")
-    pca(backed, 3, train_mask=train, chunk_size=16)
+    AnnData(sp.csr_matrix(X)).write_zarr(tmp_path / "a.zarr")
+    adata = AnnData(ad.io.sparse_dataset(zarr.open_group(tmp_path / "a.zarr")["X"]))
+    pca(adata, 3, train_mask=train, chunk_size=16)
 
     ref = PCA(3).fit(X[train])
-    np.testing.assert_allclose(np.abs(backed.varm["PCs"]), np.abs(ref.components_.T), atol=1e-4)
+    np.testing.assert_allclose(np.abs(adata.varm["PCs"]), np.abs(ref.components_.T), atol=1e-4)
+    np.testing.assert_allclose(np.abs(adata.obsm["X_pca"]), np.abs(ref.transform(X)), atol=1e-4)

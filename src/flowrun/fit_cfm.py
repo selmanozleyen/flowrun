@@ -159,6 +159,16 @@ def enable_zarrs() -> None:
         raise RuntimeError(f"zarrs codec pipeline did not load (active: {cls.__module__}.{cls.__name__}).")
 
 
+def read_zarr_backed_x(path: Path) -> ad.AnnData:
+    """Read a zarr AnnData with ``X`` left on disk; everything else is read into memory."""
+    import zarr
+
+    group = zarr.open_group(path, mode="r")
+    elems = {k: ad.io.read_elem(group[k]) for k in ("obs", "var", "obsm", "varm", "obsp", "uns") if k in group}
+    x = group["X"]
+    return ad.AnnData(X=ad.io.sparse_dataset(x) if isinstance(x, zarr.Group) else x, **elems)
+
+
 @hydra.main(config_path="configs", config_name="fit_cfm", version_base=None)
 def main(config: DictConfig) -> float:
     """Main entrypoint for CFM training."""
@@ -176,7 +186,7 @@ def main(config: DictConfig) -> float:
     # applied to the data.
     logger.info(f"Reading target adata from {config.paths.target_adata}.")
     path = Path(config.paths.target_adata)
-    adata = ad.read_zarr(path) if path.suffix == ".zarr" else ad.read_h5ad(path)
+    adata = read_zarr_backed_x(path) if path.suffix == ".zarr" else ad.read_h5ad(path)
     logger.info(f"Target adata read: {adata}")
 
     # Split: one label per row in ``obs[splitter.split_key]``, read back as ``split_by``.
