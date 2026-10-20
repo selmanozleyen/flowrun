@@ -1,9 +1,8 @@
-"""Split labels for ``adata.obs``: each function reads only ``obs`` and returns ``"train"`` / ``"val"`` /
-``"test"`` per row.
+"""Split labels for ``adata.obs``: each function reads only ``obs`` and returns one label per row.
 
-Both splitters share sources: source rows are labelled ``"train"``, and sckitflow draws every split's sources
-from all of them (matched by group), ignoring their label. Only targets are split, so a target is in exactly one
-split. Write the result to ``adata.obs[split_by]``; sckitflow's ``DataManagerConfig(split_by=...)`` reads it.
+Targets get ``"train"``, ``"val"`` or ``"test"``, so a target is in exactly one split. Sources get ``"all"``: both
+splitters share them, and sckitflow draws every split's sources from all of them (matched by group). Write the
+result to ``adata.obs[split_by]``; sckitflow's ``DataManagerConfig(split_by=...)`` reads it.
 """
 
 from __future__ import annotations
@@ -25,7 +24,8 @@ def shared_source_holdout(
 ) -> pd.Series:
     """Hold out chosen values of one column, e.g. whole cell lines.
 
-    Targets whose ``obs[key]`` is in ``test`` (``val``) are labelled ``"test"`` (``"val"``), the rest ``"train"``.
+    Targets whose ``obs[key]`` is in ``test`` (``val``) are labelled ``"test"`` (``"val"``), the rest ``"train"``;
+    sources ``"all"``.
     """
     values = obs[key].astype(str)
     unknown = set(map(str, (*test, *val))) - set(values)
@@ -34,6 +34,7 @@ def shared_source_holdout(
     labels = np.full(len(obs), "train", dtype=object)
     labels[values.isin(list(map(str, val))).to_numpy() & ~is_source] = "val"
     labels[values.isin(list(map(str, test))).to_numpy() & ~is_source] = "test"
+    labels[is_source] = "all"
     return pd.Series(pd.Categorical(labels), index=obs.index)
 
 
@@ -80,5 +81,5 @@ def shared_source_combination(
 
     keys = pd.MultiIndex.from_arrays([obs[c].astype(str).to_numpy() for c in gk])
     labels = np.asarray([held.get(k, "train") for k in keys], dtype=object)
-    labels[is_source] = "train"
+    labels[is_source] = "all"
     return pd.Series(pd.Categorical(labels), index=obs.index)

@@ -218,9 +218,9 @@ def main(config: DictConfig) -> float:
         )
     adata.obs[splitter.split_key] = labels
 
-    # PCA is fitted on the training split only (sources included), so held-out cells never shape the space.
+    # PCA is fitted on the training targets and the shared sources, so held-out cells never shape the space.
     if config.pca.n_comps is not None:
-        train_mask = (adata.obs[splitter.split_key] == "train").to_numpy()
+        train_mask = adata.obs[splitter.split_key].isin(["train", "all"]).to_numpy()
         pca(
             adata,
             config.pca.n_comps,

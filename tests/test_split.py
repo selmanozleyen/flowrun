@@ -12,9 +12,9 @@ OBS = pd.DataFrame(
 IS_SOURCE = (OBS["drug"] == "control").to_numpy()
 
 
-def test_holdout_by_cell_line_keeps_sources_in_train():
+def test_holdout_by_cell_line_shares_sources():
     labels = shared_source_holdout(OBS, "cell_line", is_source=IS_SOURCE, test=["B"])
-    assert labels.tolist() == ["train"] * 7 + ["test"] * 5
+    assert labels.tolist() == ["all"] + ["train"] * 5 + ["all"] + ["test"] * 5
 
 
 def test_holdout_rejects_unknown_values():
@@ -32,5 +32,5 @@ def test_combination_keeps_every_cell_line_in_train():
         val_fraction=0.2,
     )
     per_line = pd.crosstab(OBS["cell_line"], labels)
-    assert (per_line["test"] == 2).all() and (per_line["val"] == 1).all() and (per_line["train"] == 3).all()
-    assert (labels[IS_SOURCE] == "train").all()
+    assert (per_line["test"] == 2).all() and (per_line["val"] == 1).all() and (per_line["train"] == 2).all()
+    assert (labels[IS_SOURCE] == "all").all()

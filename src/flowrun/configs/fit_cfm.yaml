@@ -61,8 +61,8 @@ noise_sampler:
 # -----------------------------------------------------------------------------
 # Splitter (`flowrun.split`)
 #
-# Writes "train" / "val" / "test" into `obs[split_key]`. Sources (`source_key ==
-# source_value`) are shared: labelled "train" and drawn by every split.
+# Writes "train" / "val" / "test" for targets into `obs[split_key]`. Sources
+# (`source_key == source_value`) are shared: labelled "all" and drawn by every split.
 #
 #   type   "shared_source_combination": hold out whole `group_keys` combinations
 #          "shared_source_holdout": hold out chosen values of one obs column `key`
