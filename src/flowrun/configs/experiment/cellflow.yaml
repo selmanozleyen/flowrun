@@ -1,0 +1,69 @@
+# @package _global_
+# CellFlow: OT-matched conditional flow matching from control to perturbed cells.
+#   flowrun-fit-cfm +experiment=cellflow paths.target_adata=/path/to/data.zarr save.run_dir=runs/cellflow
+# Expects obs drug1 / drug2 / cell_line (controls: drug1 == "control") and embeddings in
+# uns["drug"] / uns["cell_line"]. Mirrors sckitflow's docs/configs/cellflow.yaml.
+
+splitter:
+  type: shared_source_combination
+  source_key: drug1
+  source_value: control
+  group_keys: [cell_line, drug1, drug2]
+  always_train_keys: [cell_line]    # every cell line keeps some combinations in train
+  test_fraction: 0.2
+  val_fraction: 0.1
+
+pca:
+  n_comps: 50
+  n_hvg: 2000
+
+datamanager:
+  sample_rep: X_pca
+  rep_lin: X_pca                    # OT cost on the PCA space, not on X
+  categorical_conditions:
+    drug: [drug1, drug2]            # a combination is a set of drugs
+  categorical_reps:
+    drug: drug                      # uns["drug"][name] -> embedding
+  control_values_dict:
+    drug: control
+  groups: [cell_line]               # controls are drawn from the same cell line
+  groups_reps:
+    cell_line: cell_line            # uns["cell_line"][name] -> embedding
+
+module:
+  time_features_id: ott-jax
+  num_time_features: 128
+  time_encoder_output_dim: 256
+  state_encoder_output_dim: 256
+  state_encoder_mlp_kwargs: {hidden_dims: [1024]}
+  conditioning_id: concat
+  vf_decoder_mlp_kwargs: {hidden_dims: [1024, 1024]}
+  condition_encoder_output_dim: 256
+  condition_encoder_pooling_mode: attention-token
+  condition_encoder_pooling_kwargs: {num_heads: 8, qkv_dim: 64}
+  condition_encoder_input_layers:   # input_dim comes from the embeddings
+    drug: {output_dim: 256, hidden_dims: [512]}
+    cell_line: {output_dim: 256, hidden_dims: [512]}
+
+coupling:
+  method: sinkhorn
+  reg: 0.5
+
+probability_path:                   # CellFlow's default: constant noise 0
+  name: linear_dirac
+  sigma: 0.0
+
+inference:
+  n_steps: 50
+  solver_kwargs: {method: euler}
+
+optimizer:
+  name: Adam
+  kwargs: {lr: 1.0e-4}
+
+datamodule:
+  batch_size: 1024
+  n_train_steps: 50000
+
+trainer:
+  max_steps: 50000

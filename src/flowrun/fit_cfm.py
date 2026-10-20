@@ -234,25 +234,8 @@ def main(config: DictConfig) -> float:
     # The ``DataManager`` is never materialized directly here: it lives
     # in the ``datamodule``, of which it is an attribute.
     logger.info("Initializing datamanager.")
-    dm_cfg = DataManagerConfig(
-        sample_rep=config.datamanager.sample_rep,
-        categorical_conditions=config.datamanager.categorical_conditions,
-        categorical_reps=config.datamanager.categorical_reps,
-        continuous_conditions=config.datamanager.continuous_conditions,
-        control_values_dict=config.datamanager.control_values_dict,
-        matched_pairs=config.datamanager.matched_pairs,
-        split_by=config.datamanager.split_by,
-        condition_state_key=config.datamanager.condition_state_key,
-        target_categorical_covs_dict=config.datamanager.target_categorical_covs_dict,
-        target_continuous_covs=config.datamanager.target_continuous_covs,
-        groups=config.datamanager.groups,
-        groups_reps=config.datamanager.groups_reps,
-        groups_encoding=config.datamanager.groups_encoding,
-        rep_lin=config.datamanager.rep_lin,
-        source_rep_quad=config.datamanager.source_rep_quad,
-        target_rep_quad=config.datamanager.target_rep_quad,
-        use_linear=config.datamanager.use_linear,
-    )
+    # Plain containers: an OmegaConf node inside the spec cannot be saved with the model.
+    dm_cfg = DataManagerConfig(**OmegaConf.to_container(config.datamanager, resolve=True))
 
     # Initialize datamodule.
     # The loaders' sampling schedule is seeded from ``config.run.loader_seed`` for reproducibility.
@@ -288,7 +271,8 @@ def main(config: DictConfig) -> float:
         vf_decoder_mlp_kwargs=resolve_omegaconf_to_dictionary(config.module.vf_decoder_mlp_kwargs),
         conditioning_id=config.module.conditioning_id,
         conditioning_kwargs=resolve_omegaconf_to_dictionary(config.module.conditioning_kwargs),
-        condition_encoder_input_layers=config.module.condition_encoder_input_layers,
+        condition_encoder_input_layers=resolve_omegaconf_to_dictionary(config.module.condition_encoder_input_layers)
+        or None,
         condition_encoder_output_dim=config.module.condition_encoder_output_dim,
         condition_encoder_pooling_mode=config.module.condition_encoder_pooling_mode,
         condition_encoder_pooling_kwargs=resolve_omegaconf_to_dictionary(

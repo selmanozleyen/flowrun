@@ -163,7 +163,6 @@ def _dm_shared(**overrides_kwargs) -> dict:
         "groups": [],
         "groups_encoding": {},
         "groups_reps": {},
-        "matched_pairs": [],
         "rep_lin": None,
         "source_rep_quad": None,
         "target_rep_quad": None,

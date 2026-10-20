@@ -91,7 +91,7 @@ splitter:
 #   conditions_reps        per-condition representation overrides
 #   conditions_covariates  per-condition extra covariate columns
 #   control_values_dict    {obs_col: value} pairs identifying control cells
-#   matched_pairs          pair source/target samples (true) or not (false)
+#   matched_pairs          fixed [[source group, target group], ...] pairs, or null to match by control_values_dict
 #   split_by               obs column for group-aware splits — must match
 #                          `splitter.split_key`
 #   condition_state_key    obs column naming the cell-state condition
@@ -108,7 +108,7 @@ datamanager:
   categorical_reps: {}
   continuous_conditions: []
   control_values_dict: {}
-  matched_pairs: false
+  matched_pairs: null
   split_by: "${splitter.split_key}"
   condition_state_key: null
   target_categorical_covs_dict: {}

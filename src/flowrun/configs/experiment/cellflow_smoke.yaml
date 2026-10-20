@@ -1,0 +1,32 @@
+# @package _global_
+# CellFlow, scaled down to check the wiring in a few minutes on CPU:
+#   flowrun-fit-cfm +experiment=cellflow_smoke paths.target_adata=/path/to/data.zarr save.run_dir=runs/smoke
+defaults:
+  - cellflow
+
+pca:
+  n_comps: 20
+  n_hvg: null
+
+module:
+  num_time_features: 32
+  time_encoder_output_dim: 64
+  state_encoder_output_dim: 64
+  state_encoder_mlp_kwargs: {hidden_dims: [128]}
+  vf_decoder_mlp_kwargs: {hidden_dims: [128, 128]}
+  condition_encoder_output_dim: 32
+  condition_encoder_pooling_kwargs: {num_heads: 2, qkv_dim: 16}
+  condition_encoder_input_layers:
+    drug: {output_dim: 32, hidden_dims: [64]}
+    cell_line: {output_dim: 32, hidden_dims: [64]}
+
+inference:
+  n_steps: 10
+
+datamodule:
+  batch_size: 128
+  n_train_steps: 200
+
+trainer:
+  max_steps: 200
+  accelerator: cpu

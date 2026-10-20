@@ -18,6 +18,15 @@ uv run flowrun-fit-cfm paths.target_adata=/path/to/data.zarr save.run_dir=runs/f
 Every key and its default lives in `src/flowrun/configs/fit_cfm.yaml`. The run is saved with
 `sckitflow.Model.save_pretrained`, so `sckitflow.Model.from_pretrained(run_dir, adata)` reloads it.
 
+## CellFlow
+
+```bash
+uv run flowrun-fit-cfm +experiment=cellflow paths.target_adata=/path/to/data.zarr save.run_dir=runs/cellflow
+```
+
+`configs/experiment/cellflow.yaml` holds CellFlow's settings (OT-matched CFM on `X_pca`, drug combinations
+pooled with attention, cell line as the group); `cellflow_smoke` is a small version for checking the wiring.
+
 ## Layout
 
 - `flowrun.split`: `train` / `val` / `test` labels for an obs column, with sources shared across splits;
