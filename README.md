@@ -24,6 +24,9 @@ Every key and its default lives in `src/flowrun/configs/fit_cfm.yaml`. The run i
 uv run flowrun-fit-cfm +experiment=cellflow paths.target_adata=/path/to/data.zarr save.run_dir=runs/cellflow
 ```
 
+`paths.target_adata` also takes a list, read as one dataset (e.g. `[ctrl.zarr,pert.zarr]`); each file gets
+its own split column and PCA rows written back.
+
 `configs/experiment/cellflow.yaml` holds CellFlow's settings (OT-matched CFM on `X_pca`, drug combinations
 pooled with attention, cell line as the group); `cellflow_smoke` is a small version for checking the wiring.
 

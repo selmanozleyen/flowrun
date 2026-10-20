@@ -25,7 +25,8 @@ hydra:
 # -----------------------------------------------------------------------------
 # Input data paths
 #
-# target_adata:  the AnnData used for training: a `.zarr` store, or an `.h5ad` file. Controls are picked from it by the
+# target_adata:  the AnnData used for training: a `.zarr` store or an `.h5ad` file, or a list of
+#                them read as one dataset (e.g. controls and perturbed cells in separate stores). Controls are picked from it by the
 #                datamanager's `control_values_dict` (or `matched_pairs`).
 # -----------------------------------------------------------------------------
 paths:

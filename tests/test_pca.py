@@ -77,3 +77,23 @@ def test_write_obs_column_keeps_the_rest(tmp_path, suffix):
     assert list(back.obs.columns) == ["cell_line", "split"]
     assert back.obs["split"].tolist() == ["train", "val", "all", "train"]
     assert back.obs["cell_line"].tolist() == ["A", "A", "B", "B"]
+
+
+def test_a_list_is_one_dataset():
+    rng = np.random.default_rng(4)
+    X = rng.normal(size=(60, 7)).astype(np.float32)
+    train = rng.random(60) < 0.7
+    whole = AnnData(X)
+    pca(whole, 3, train_mask=train)
+    parts = [AnnData(X[:25]), AnnData(X[25:])]
+    pca(parts, 3, train_mask=train)
+    signs = np.sign((parts[0].varm["PCs"] * whole.varm["PCs"]).sum(0))  # a component's sign is arbitrary
+    np.testing.assert_allclose(np.vstack([p.obsm["X_pca"] for p in parts]) * signs, whole.obsm["X_pca"], atol=1e-4)
+    assert all(np.array_equal(p.varm["PCs"], parts[0].varm["PCs"]) for p in parts)  # one basis for every file
+
+
+def test_a_list_needs_one_gene_space():
+    a, b = AnnData(np.ones((4, 3))), AnnData(np.ones((4, 3)))
+    b.var_names = ["x", "y", "z"]
+    with pytest.raises(ValueError, match="AnnData 1 has different genes"):
+        pca([a, b], 2)

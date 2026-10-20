@@ -90,6 +90,7 @@ from typing import Any
 import anndata as ad
 import hydra
 import numpy as np
+import pandas as pd
 import torch
 from lightning.pytorch import Trainer, seed_everything
 from lightning.pytorch.callbacks import (
@@ -99,7 +100,7 @@ from lightning.pytorch.callbacks import (
     ModelCheckpoint,
 )
 from lightning.pytorch.loggers import CSVLogger, WandbLogger
-from omegaconf import DictConfig, OmegaConf
+from omegaconf import DictConfig, ListConfig, OmegaConf
 from sckitflow import (
     IsotropicGaussianNoiseSamplerConfig,
     Model,
@@ -158,6 +159,11 @@ def enable_zarrs() -> None:
     cls = get_pipeline_class()
     if f"{cls.__module__}.{cls.__name__}" != "zarrs.ZarrsCodecPipeline":
         raise RuntimeError(f"zarrs codec pipeline did not load (active: {cls.__module__}.{cls.__name__}).")
+
+
+def as_list(value) -> list:
+    """A single config value, or a list of them, as a list."""
+    return list(value) if isinstance(value, ListConfig | list | tuple) else [value]
 
 
 def read_zarr_input(path: Path, config: DictConfig) -> ad.AnnData:
@@ -227,25 +233,36 @@ def main(config: DictConfig) -> float:
     # data after loading; at the moment, only vanilla loading
     # with ``anndata`` is performed, and no other transformation is
     # applied to the data.
-    logger.info(f"Reading target adata from {config.paths.target_adata}.")
-    path = Path(config.paths.target_adata)
-    adata = read_zarr_input(path, config) if path.suffix == ".zarr" else ad.read_h5ad(path)
-    logger.info(f"Target adata read: {adata}")
+    # One file or a list read as one dataset (rows in list order), each file with only what the run uses.
+    paths = [Path(p) for p in as_list(config.paths.target_adata)]
+    adatas = [read_zarr_input(p, config) if p.suffix == ".zarr" else ad.read_h5ad(p) for p in paths]
+    logger.info(
+        f"Read {len(adatas)} file(s): " + ", ".join(f"{p.name} ({a.n_obs} cells)" for p, a in zip(paths, adatas))
+    )
 
     # Split: one label per row in ``obs[splitter.split_key]``, read back as ``split_by``. A split already in the
-    # input file is reused, so every model trained on the file shares it.
+    # input files is reused, so every model trained on them shares it.
     splitter = config.splitter
-    new_split = splitter.split_key not in adata.obs.columns or splitter.overwrite
+    without = [p.name for p, a in zip(paths, adatas, strict=True) if splitter.split_key not in a.obs.columns]
+    if without and len(without) < len(paths) and not splitter.overwrite:
+        raise ValueError(
+            f"obs[{splitter.split_key!r}] is in some input files but not in {without}, and one split must cover "
+            "every file. Set splitter.overwrite=true to split them all again."
+        )
+    new_split = bool(without) or splitter.overwrite
     if new_split:
-        adata.obs[splitter.split_key] = split_labels(adata.obs, splitter, seed=config.run.splitter_seed)
+        obs = pd.concat([a.obs for a in adatas], ignore_index=True)
+        labels = split_labels(obs, splitter, seed=config.run.splitter_seed)
+        for a, part in zip(adatas, np.split(labels.to_numpy(), np.cumsum([a.n_obs for a in adatas])[:-1]), strict=True):
+            a.obs[splitter.split_key] = pd.Categorical(part, categories=labels.cat.categories)
     else:
         logger.info(f"Reusing the split in obs[{splitter.split_key!r}]; set splitter.overwrite=true to re-split.")
 
     # PCA is fitted on the training targets and the shared sources, so held-out cells never shape the space.
     if config.pca.n_comps is not None:
-        train_mask = adata.obs[splitter.split_key].isin(["train", "all"]).to_numpy()
+        train_mask = np.concatenate([a.obs[splitter.split_key].isin(["train", "all"]).to_numpy() for a in adatas])
         pca(
-            adata,
+            adatas,
             config.pca.n_comps,
             train_mask=train_mask,
             n_hvg=config.pca.n_hvg,
@@ -265,7 +282,7 @@ def main(config: DictConfig) -> float:
     logger.info(f"Initializing datamodule with seed {config.run.loader_seed}")
     datamodule_rng = np.random.default_rng(config.run.loader_seed)
     datamodule = FlowDataModule.from_adata(
-        adata,
+        adatas if len(adatas) > 1 else adatas[0],
         dm_cfg.build(),
         train_split=config.datamodule.train_split,
         n_train_steps=config.datamodule.n_train_steps,
@@ -593,12 +610,14 @@ def main(config: DictConfig) -> float:
     model.save_pretrained(config.save.run_dir, overwrite=config.run.allow_overwrite)
 
     if new_split:
-        logger.info(f"Writing the split to obs[{splitter.split_key!r}] of {config.paths.target_adata}.")
-        write_obs_column(config.paths.target_adata, splitter.split_key, adata.obs[splitter.split_key].array)
+        for p, a in zip(paths, adatas, strict=True):
+            logger.info(f"Writing the split to obs[{splitter.split_key!r}] of {p}.")
+            write_obs_column(p, splitter.split_key, a.obs[splitter.split_key].array)
     if config.pca.n_comps is not None:
         # Into the input file: every cell's projection, and the basis that maps predictions back to genes.
-        logger.info(f"Writing the PCA into {config.paths.target_adata}.")
-        write_pca(config.paths.target_adata, adata, config.datamanager.sample_rep, overwrite=config.pca.overwrite)
+        for p, a in zip(paths, adatas, strict=True):
+            logger.info(f"Writing the PCA into {p}.")
+            write_pca(p, a, config.datamanager.sample_rep, overwrite=config.pca.overwrite)
 
     # Capture the edist from the latest validation step.
     val_edist_key = f"val/{EDIST_KEY}"

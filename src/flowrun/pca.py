@@ -12,6 +12,7 @@ default to HVGs (as cf-train does), and add a GPU path (rapids-singlecell, or cf
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from pathlib import Path
 
 import anndata as ad
@@ -26,7 +27,7 @@ from flowrun._store import open_store
 
 
 def pca(
-    adata: AnnData,
+    adata: AnnData | Sequence[AnnData],
     n_comps: int,
     *,
     train_mask: np.ndarray | None = None,
@@ -40,11 +41,13 @@ def pca(
     Parameters
     ----------
     adata
-        Cells by genes; ``X`` may be in memory, backed on disk (zarr), or dask.
+        Cells by genes; ``X`` may be in memory, backed on disk (zarr), or dask. A list is read as one dataset,
+        rows in list order: one basis is fitted over all of them, and each gets its own rows' projection.
     n_comps
         Number of components.
     train_mask
-        Boolean mask over the rows the basis (and the HVGs) are fitted on. ``None`` fits on every row.
+        Boolean mask over the rows (of all files, in list order) the basis and the HVGs are fitted on.
+        ``None`` fits on every row.
         Pass the training split, so held-out cells never shape the space they are scored in.
     n_hvg
         Restrict the fit to this many highly variable genes; ``None`` uses every gene.
@@ -58,15 +61,16 @@ def pca(
     Writes ``obsm[key_added]`` for every row, ``varm["PCs"]`` (zero for genes outside the fit) and
     ``uns["pca"]`` (``mean``, ``variance``, ``variance_ratio``).
     """
-    X = adata.X
-    if isinstance(X, ad.abc.CSRDataset):  # backed sparse: read lazily, chunk by chunk
-        X = ad.experimental.read_elem_lazy(X.group, chunks=(chunk_size, adata.n_vars))
-    elif isinstance(X, zarr.Array):  # backed dense
-        X = da.from_zarr(X, chunks=(chunk_size, -1))
-    elif not isinstance(X, da.Array):
-        X = da.from_array(X, chunks=(chunk_size, -1), asarray=False)
+    adatas = [adata] if isinstance(adata, AnnData) else list(adata)
+    for i, other in enumerate(adatas[1:], start=1):
+        if not other.var_names.equals(adatas[0].var_names):
+            raise ValueError(
+                f"AnnData {i} has different genes (var_names) than AnnData 0, but one PCA needs one gene space. "
+                "Align the files to a common gene panel, in the same order, first."
+            )
+    X = da.concatenate([_as_dask(a, chunk_size) for a in adatas], axis=0)
     X = X.rechunk({1: -1})  # scanpy's dask PCA wants whole rows per chunk
-    rows = np.flatnonzero(train_mask) if train_mask is not None else np.arange(adata.n_obs)
+    rows = np.flatnonzero(train_mask) if train_mask is not None else np.arange(X.shape[0])
 
     fit = AnnData(X[rows])
     if n_hvg is not None:
@@ -81,10 +85,25 @@ def pca(
         dtype=np.float32,
         chunks=(X.chunks[0], (n_comps,)),
     )
-    adata.obsm[key_added] = projected.compute()
-    adata.varm["PCs"] = pcs
-    adata.uns["pca"] = {k: np.asarray(da.compute(v)[0]) for k, v in fit.uns["pca"].items() if k != "params"}
-    adata.uns["pca"]["mean"] = mean
+    out = projected.compute()
+    summary = {k: np.asarray(da.compute(v)[0]) for k, v in fit.uns["pca"].items() if k != "params"}
+    offsets = np.cumsum([0, *(a.n_obs for a in adatas)])
+    for a, start, stop in zip(adatas, offsets[:-1], offsets[1:], strict=True):
+        a.obsm[key_added] = out[start:stop]
+        a.varm["PCs"] = pcs
+        a.uns["pca"] = {**summary, "mean": mean}
+
+
+def _as_dask(adata: AnnData, chunk_size: int) -> da.Array:
+    """``adata.X`` as a dask array chunked by rows, without loading a backed one."""
+    X = adata.X
+    if isinstance(X, ad.abc.CSRDataset):  # backed sparse: read lazily, chunk by chunk
+        return ad.experimental.read_elem_lazy(X.group, chunks=(chunk_size, adata.n_vars))
+    if isinstance(X, zarr.Array):  # backed dense
+        return da.from_zarr(X, chunks=(chunk_size, -1))
+    if isinstance(X, da.Array):
+        return X
+    return da.from_array(X, chunks=(chunk_size, -1), asarray=False)
 
 
 def write_pca(path: str | Path, adata: AnnData, key: str = "X_pca", *, overwrite: bool = False) -> None:
