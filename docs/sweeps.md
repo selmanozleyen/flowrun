@@ -41,7 +41,7 @@ export FLOWRUN_SWEEP_DIR=/lustre/groups/<group>/<you>/sweeps
 ## 0. Setup
 
 ```bash
-uv sync --extra sweep
+uv sync
 uv run python -c "import hydra, optuna, hydra_plugins.hydra_optuna_sweeper; print(hydra.__version__, optuna.__version__)"
 ```
 
@@ -137,9 +137,9 @@ concentrates trials around good regions.
 
 | Symptom | Fix |
 |---|---|
-| `Key '_recursive_' not in 'OptunaSweeperConf'` at composition | `hydra-core` is a 1.4 pre-release; use the locked 1.3 (`uv sync --extra sweep`) |
+| `Key '_recursive_' not in 'OptunaSweeperConf'` at composition | `hydra-core` is a 1.4 pre-release; use the locked 1.3 (`uv sync --locked`) |
 | `Key 'infer_relative_search_space' not in 'SamplerConfig'` | The sampler reached Optuna uninstantiated: select it with `override /hydra/sweeper/sampler: random` only, never with a manual `sampler:` block |
-| `Could not find 'hydra/sweeper/optuna'` | The `sweep` extra is missing: `uv sync --extra sweep` |
+| `Could not find 'hydra/sweeper/optuna'` | Not flowrun's environment: `uv sync`, then `uv run` |
 | `Key 'partition' not in 'BasicLauncherConf'` | SLURM settings need a SLURM launcher: select the project's (`hydra/launcher=<site>`) |
 | `Hydra15MigrationWarning` about `version_base` | Harmless on hydra-core 1.3 |
 | `File exists: .../save` on a retried trial | A preempted trial left a partial directory: remove it, or set `run.allow_overwrite=true` |
