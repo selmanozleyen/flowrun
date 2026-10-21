@@ -7,7 +7,6 @@ result to ``adata.obs[split_by]``; sckitflow's ``DataManagerConfig(split_by=...)
 
 from __future__ import annotations
 
-import warnings
 from collections.abc import Sequence
 
 import numpy as np
@@ -71,12 +70,12 @@ def shared_source_combination(
         n_val = min(int(np.floor(val_fraction * len(rows))), len(rows) - 1 - n_test)
         order = rng.permutation(len(rows))
         held |= {rows[i]: "test" for i in order[:n_test]} | {rows[i]: "val" for i in order[n_test : n_test + n_val]}
-    if test_fraction > 0 and "test" not in held.values():
-        warnings.warn(
-            f"Nothing was held out: at test_fraction={test_fraction} a stratum needs at least "
-            f"{int(np.ceil(1 / test_fraction))} combinations to give one to test.",
-            UserWarning,
-            stacklevel=2,
+    if (test_fraction > 0 or val_fraction > 0) and not held:
+        smallest = int(np.ceil(1 / max(test_fraction, val_fraction)))
+        raise ValueError(
+            f"Nothing was held out: at test_fraction={test_fraction}, val_fraction={val_fraction} a stratum needs "
+            f"at least {smallest} combinations to give one away. Use more group_keys combinations, or prepare a "
+            "split column in the input file."
         )
 
     keys = pd.MultiIndex.from_arrays([obs[c].astype(str).to_numpy() for c in gk])

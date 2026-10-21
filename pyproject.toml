@@ -23,6 +23,7 @@ dependencies = [
   "zarrs",
 ]
 optional-dependencies.sweep = [
+  "hydra-core>=1.3,<1.4",     # 1.4 pre-releases break hydra-optuna-sweeper
   "hydra-optuna-sweeper",
   "hydra-submitit-launcher",
 ]
@@ -46,3 +47,4 @@ src = [ "src" ]
 [tool.pytest.ini_options]
 testpaths = [ "tests" ]
 addopts = [ "--import-mode=importlib" ]
+markers = [ "slow: runs a subprocess training job (deselect with -m 'not slow')" ]

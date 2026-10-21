@@ -1,0 +1,15 @@
+# @package _global_
+# flow_cyto_panel_alignment sweep with fused Gromov-Wasserstein matching (the experiment's default coupling): 30 random draws over
+# input data x epsilon x alpha x scale_cost (90 cells).
+#   flowrun-fit-cfm -m +experiment=flow_cyto_panel_alignment_sweep_fused
+defaults:
+  - flow_cyto_panel_alignment_sweep
+
+sweep_name: flow_cyto_panel_alignment_sweep_fused
+
+hydra:
+  sweeper:
+    params:
+      coupling.epsilon: choice(0.5, 1.0, 2.0)
+      coupling.alpha: choice(0.25, 0.5, 0.75)
+      coupling.scale_cost: choice(mean, median)

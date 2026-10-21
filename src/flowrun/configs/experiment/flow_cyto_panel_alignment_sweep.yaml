@@ -1,0 +1,64 @@
+# @package _global_
+# Shared settings of the flow_cyto_panel_alignment sweeps (ported from theislab/sckitflow#202): Optuna random draws over the input
+# data, one SLURM job per trial via submitit. Run one of flow_cyto_panel_alignment_sweep_fused / flow_cyto_panel_alignment_sweep_linear, which add the
+# coupling axes. Needs the `sweep` extra (`uv sync --extra sweep`) and stable
+# hydra-core 1.3.x (1.4 pre-releases break the Optuna sweeper at composition). See docs/sweeps.md.
+#   flowrun-fit-cfm -m +experiment=flow_cyto_panel_alignment_sweep_fused
+# Needs FLOWRUN_PANEL_DATA, the directory holding `adata_concat_seed{42..46}/adata_concat.h5ad`; trials go to
+# a fresh timestamped directory under FLOWRUN_SWEEP_DIR (default `multirun`). The launcher is the Helmholtz one.
+defaults:
+  - flow_cyto_panel_alignment
+  - override /hydra/launcher: helmholtz      # SLURM settings in configs/hydra/launcher/helmholtz.yaml
+  - override /hydra/sweeper: optuna
+  - override /hydra/sweeper/sampler: random   # do not add a manual `sampler:` block: it fights this override
+
+hydra:
+  job:
+    chdir: false
+  sweep:
+    dir: ${oc.env:FLOWRUN_SWEEP_DIR,multirun}/${sweep_name}/${now:%Y-%m-%d_%H-%M-%S}   # a relaunch never collides
+  sweeper:
+    direction: minimize       # fit_cfm returns the monitored metric (callbacks.model_checkpoint.monitor)
+    max_failure_rate: 0.2     # a few failed (nan) trials do not abort the driver
+    sampler:
+      seed: 0                 # reproducible draws
+    n_jobs: 30
+    n_trials: 30
+    params:
+      paths.target_adata: >-
+        choice(
+        ${oc.env:FLOWRUN_PANEL_DATA}/adata_concat_seed42/adata_concat.h5ad,
+        ${oc.env:FLOWRUN_PANEL_DATA}/adata_concat_seed43/adata_concat.h5ad,
+        ${oc.env:FLOWRUN_PANEL_DATA}/adata_concat_seed44/adata_concat.h5ad,
+        ${oc.env:FLOWRUN_PANEL_DATA}/adata_concat_seed45/adata_concat.h5ad,
+        ${oc.env:FLOWRUN_PANEL_DATA}/adata_concat_seed46/adata_concat.h5ad
+        )
+
+sweep_name: ???   # set by each sweep: its sweep dir, W&B group and run names
+
+# Every writer under the trial's own output directory.
+save:
+  run_dir: ${hydra:runtime.output_dir}/save
+callbacks:
+  early_stopping:
+    patience: 10
+  model_checkpoint:
+    dirpath: ${hydra:runtime.output_dir}/checkpoints
+trainer:
+  default_root_dir: ${hydra:runtime.output_dir}/logs
+  max_epochs: 30
+  enable_progress_bar: false
+loggers:
+  wandb:
+    save_dir: ${hydra:runtime.output_dir}/logs/wandb
+    name: ${sweep_name}-trial-${hydra:job.num}
+    offline: true
+    init_kwargs:
+      group: ${sweep_name}
+      job_type: random_search
+      tags: [flow_cyto_panel_alignment, "${sweep_name}", "trial_${hydra:job.num}"]
+  csv:
+    save_dir: ${hydra:runtime.output_dir}/logs/csv
+    name: ${sweep_name}-trial-${hydra:job.num}
+run:
+  allow_overwrite: false

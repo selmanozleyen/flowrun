@@ -561,6 +561,8 @@ def _compose(*, target_adata_path, tmp_path, overrides, config_name="fit_cfm"):
         f"trainer.default_root_dir={tmp_path / 'logs'}",
         "trainer.fast_dev_run=true",
         "trainer.enable_progress_bar=false",
+        # the dummy data's few combinations leave val empty at the default fraction; test is always held out
+        "callbacks.model_checkpoint.monitor=test/edist",
         "loggers.wandb.offline=true",
         "run.allow_overwrite=true",
         "hydra.job.chdir=false",

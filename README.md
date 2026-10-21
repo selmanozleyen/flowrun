@@ -34,9 +34,9 @@ pooled with attention, cell line as the group); `cellflow_smoke` is a small vers
 
 ## Panel imputation and sweeps
 
-`+experiment=panel` maps cells from an old marker panel onto a new one (fused Gromov-Wasserstein, a source
-encoder); `+experiment=panel_sweep` sweeps it with Optuna on SLURM (`uv sync --extra sweep`, then
-`flowrun-fit-cfm -m +experiment=panel_sweep`). The runbook is `docs/sweeps.md`.
+`+experiment=flow_cyto_panel_alignment` maps cells from an old flow cytometry marker panel onto a new one (fused Gromov-Wasserstein,
+a source encoder); `+experiment=flow_cyto_panel_alignment_sweep_fused` and `flow_cyto_panel_alignment_sweep_linear` sweep it with fused and linear OT
+with Optuna on SLURM (`uv sync --extra sweep`, then `flowrun-fit-cfm -m +experiment=flow_cyto_panel_alignment_sweep_fused`). The runbook is `docs/sweeps.md`.
 
 ## Layout
 
