@@ -3347,8 +3347,8 @@ wheels = [
 
 [[package]]
 name = "sckitflow"
-version = "0.1.dev974+g87431cece"
-source = { git = "https://github.com/theislab/sckitflow?branch=main#87431cecee4a32912a940357ef4dd3806ea413f5" }
+version = "0.1.dev976+g5a016b0a5"
+source = { git = "https://github.com/theislab/sckitflow?branch=main#5a016b0a5a8473a023f29e442947e2a3e24ebf25" }
 dependencies = [
     { name = "anndata" },
     { name = "lightning" },
