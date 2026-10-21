@@ -234,6 +234,7 @@ def main(config: DictConfig) -> float:
     # This is the master seeding, and it will be also saved to the run
     # for further reproducibility.
     enable_zarrs()
+    logger.info("Resolved config:\n" + OmegaConf.to_yaml(config, resolve=True))
     logger.info(f"Setting the global run seed to {config.run.method_seed}")
     seed_everything(seed=config.run.method_seed, workers=True)
 
@@ -434,6 +435,8 @@ def main(config: DictConfig) -> float:
             epsilon=config.coupling.epsilon,
             max_iter=config.coupling.max_iter,
             tol=config.coupling.tol,
+            inner_num_iter_max=config.coupling.inner_num_iter_max,
+            inner_stop_thr=config.coupling.inner_stop_thr,
         )
     elif config.coupling.method == "fused":
         coupling_cfg = FusedGromovWassersteinCouplingConfig(
@@ -442,6 +445,8 @@ def main(config: DictConfig) -> float:
             max_iter=config.coupling.max_iter,
             tol=config.coupling.tol,
             alpha=config.coupling.alpha,
+            inner_num_iter_max=config.coupling.inner_num_iter_max,
+            inner_stop_thr=config.coupling.inner_stop_thr,
         )
     else:
         raise ValueError(f"Invalid coupling method {config.coupling.method}")
@@ -543,6 +548,14 @@ def main(config: DictConfig) -> float:
         flush_logs_every_n_steps=config.loggers.csv.flush_logs_every_n_steps,
     )
     training_loggers = [wandb_logger, csv_logger]
+    # The resolved config, so a run shows exactly what it trained with: W&B's run config (filterable) and the CSV
+    # logger's hparams.yaml, plus the YAML itself as a file of the W&B run.
+    resolved = OmegaConf.to_container(config, resolve=True)
+    for training_logger in training_loggers:
+        training_logger.log_hyperparams(resolved)
+    resolved_yaml = Path(wandb_logger.experiment.dir) / "config_resolved.yaml"
+    OmegaConf.save(config, resolved_yaml, resolve=True)
+    wandb_logger.experiment.save(str(resolved_yaml), base_path=str(resolved_yaml.parent), policy="now")
 
     # Prepare callbacks.
     logger.info("Initializing early stopping callback.")
@@ -632,40 +645,44 @@ def main(config: DictConfig) -> float:
     )
 
     logger.info("Fitting the model.")
-    trainer.fit(plan, datamodule=datamodule, ckpt_path=config.trainer.ckpt_path)
+    try:
+        trainer.fit(plan, datamodule=datamodule, ckpt_path=config.trainer.ckpt_path)
 
-    # Save the trained model: its spec and the module's weights.
-    model_cfg = ModelConfig(data=dm_cfg, module=module_cfg, training=training_cfg, inference=inference_cfg)
-    model = Model(model_cfg, datamodule.dm, datamodule.data_dims, module, training_method, inference_method)
-    logger.info(f"Saving model {config.save.run_dir}.")
-    model.save_pretrained(config.save.run_dir, overwrite=config.run.allow_overwrite)
+        # Save the trained model: its spec and the module's weights.
+        model_cfg = ModelConfig(data=dm_cfg, module=module_cfg, training=training_cfg, inference=inference_cfg)
+        model = Model(model_cfg, datamodule.dm, datamodule.data_dims, module, training_method, inference_method)
+        logger.info(f"Saving model {config.save.run_dir}.")
+        model.save_pretrained(config.save.run_dir, overwrite=config.run.allow_overwrite)
 
-    if new_split:
-        for p, a in zip(paths, adatas, strict=True):
-            logger.info(f"Writing the split to obs[{splitter.split_key!r}] of {p}.")
-            write_obs_column(p, splitter.split_key, a.obs[splitter.split_key].array)
-    if preprocessed:
-        # Into the input file: every cell's projection, and the basis that maps predictions back to genes.
-        for p, a in zip(paths, adatas, strict=True):
-            logger.info(f"Writing the preprocessing into {p}.")
-            write_preprocessing(p, a, config.datamanager.target_sample_rep, overwrite=pp.overwrite)
+        if new_split:
+            for p, a in zip(paths, adatas, strict=True):
+                logger.info(f"Writing the split to obs[{splitter.split_key!r}] of {p}.")
+                write_obs_column(p, splitter.split_key, a.obs[splitter.split_key].array)
+        if preprocessed:
+            # Into the input file: every cell's projection, and the basis that maps predictions back to genes.
+            for p, a in zip(paths, adatas, strict=True):
+                logger.info(f"Writing the preprocessing into {p}.")
+                write_preprocessing(p, a, config.datamanager.target_sample_rep, overwrite=pp.overwrite)
 
-    # Return the metric the checkpoint watches (e.g. "val/edist"), so a sweep optimizes what the callbacks select on:
-    # its best value, or the last logged one when no checkpoint was scored (e.g. under fast_dev_run). Never logged
-    # raises: the Optuna sweeper counts a raised trial as failed, while a returned nan crashes the whole sweep.
-    monitored = config.callbacks.model_checkpoint.monitor
-    score = model_checkpoint.best_model_score
-    if score is None:
-        score = trainer.callback_metrics.get(monitored)
-    if score is None:
-        if monitored is None:
-            return float("nan")
-        raise RuntimeError(
-            f"The monitored metric {monitored!r} was never logged (logged: {sorted(trainer.callback_metrics)})."
-        )
-    returned_metric = float(score)
-    logger.info(f"Finishing the run with {monitored} of {returned_metric:.4f}")
-    return returned_metric
+        # Return the metric the checkpoint watches (e.g. "val/edist"), so a sweep optimizes what the callbacks select on:
+        # its best value, or the last logged one when no checkpoint was scored (e.g. under fast_dev_run). Never logged
+        # raises: the Optuna sweeper counts a raised trial as failed, while a returned nan crashes the whole sweep.
+        monitored = config.callbacks.model_checkpoint.monitor
+        score = model_checkpoint.best_model_score
+        if score is None:
+            score = trainer.callback_metrics.get(monitored)
+        if score is None:
+            if monitored is None:
+                return float("nan")
+            raise RuntimeError(
+                f"The monitored metric {monitored!r} was never logged (logged: {sorted(trainer.callback_metrics)})."
+            )
+        returned_metric = float(score)
+        logger.info(f"Finishing the run with {monitored} of {returned_metric:.4f}")
+        return returned_metric
+    finally:
+        # a run left open is reused by the next fit in this process (in-process sweeps, tests)
+        wandb_logger.experiment.finish()
 
 
 if __name__ == "__main__":

@@ -244,6 +244,10 @@ coupling:
   max_iter: 100
   tol: 1.0e-6
   alpha: 0.5
+  # GW / fused GW: POT's inner Sinkhorn per outer iteration. POT's default stopThr (1e-9) never converges in float32,
+  # so every solve runs to numItermax (36 s per 256 x 256 fused solve on an A100, 0.5 s at 1e-4)
+  inner_num_iter_max: null
+  inner_stop_thr: 1.0e-5
 
 # -----------------------------------------------------------------------------
 # Inference method (`ODEInferenceConfig`)

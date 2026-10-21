@@ -35,6 +35,25 @@ def tiny_panels(tmp_path: Path) -> list[Path]:
     return [tmp_path / "prepared" / "old.zarr", tmp_path / "prepared" / "new.zarr"]
 
 
+def test_two_runs_in_one_process_get_their_own_wandb_runs(tiny_panels: list[Path], tmp_path: Path) -> None:
+    """Each fit finishes its W&B run; otherwise the next fit in the process (in-process sweeps) logs into it."""
+    for name in ("a", "b"):
+        overrides = [
+            "+experiment=flow_cyto_panel_alignment_smoke",
+            f"paths.target_adata=[{tiny_panels[0]},{tiny_panels[1]}]",
+            f"save.run_dir={tmp_path / name / 'run'}",
+            f"callbacks.model_checkpoint.dirpath={tmp_path / name / 'ckpt'}",
+            f"loggers.wandb.save_dir={tmp_path / name / 'wandb'}",
+            f"loggers.csv.save_dir={tmp_path / name / 'csv'}",
+            f"trainer.default_root_dir={tmp_path / name / 'logs'}",
+            "hydra.job.chdir=false",
+        ]
+        with initialize_config_dir(config_dir=CONFIGS, version_base=None):
+            fit_cfm.main.__wrapped__(compose(config_name="fit_cfm", overrides=overrides))
+    for name in ("a", "b"):
+        assert len(list((tmp_path / name / "wandb").rglob("config_resolved.yaml"))) == 1
+
+
 def test_prepare_panels_renames_labels_and_records(tiny_panels: list[Path]) -> None:
     old, new = (ad.read_zarr(p) for p in tiny_panels)
     assert "CD201" in old.var_names and "EPCR" not in old.var_names
@@ -87,6 +106,10 @@ def test_panel_smoke_runs(tiny_panels: list[Path], tmp_path: Path) -> None:
     assert set(old.obs["split_42"]) == {"all"}  # the seed's split, written back; sources are every split's
     assert new.obs["split_42"].astype(str).value_counts().to_dict() == {"train": 140, "test": 40, "val": 20}
     assert not set(new.obsm) & {"X_state", "X_lin", "X_quad"}  # the reps stay in memory
+    hparams = yaml.safe_load(next((tmp_path / "csv").rglob("hparams.yaml")).read_text())
+    assert hparams["coupling"]["method"] == "fused" and hparams["panels"]["layer"] == "logicle_trans"  # resolved config
+    (resolved,) = (tmp_path / "wandb").rglob("config_resolved.yaml")
+    assert yaml.safe_load(resolved.read_text())["splitter"]["split_key"] == "split_42"  # interpolations resolved
 
 
 def test_a_never_logged_metric_fails_the_run(tiny_panels: list[Path], tmp_path: Path) -> None:
@@ -113,7 +136,15 @@ def test_the_panel_contract() -> None:
     with initialize_config_dir(config_dir=CONFIGS, version_base=None):
         cfg = compose(config_name="fit_cfm", overrides=["+experiment=flow_cyto_panel_alignment"])
     c = cfg.coupling
-    assert (c.method, c.epsilon, c.alpha, c.scale_cost, c.max_iter, c.tol) == ("fused", 1.0, 0.5, "median", 1000, 1e-9)
+    assert (c.method, c.epsilon, c.alpha, c.scale_cost, c.max_iter, c.tol, c.inner_stop_thr) == (
+        "fused",
+        1.0,
+        0.5,
+        "median",
+        100,
+        1e-5,
+        1e-4,
+    )
     dm = cfg.datamanager
     assert (dm.target_sample_rep, dm.source_sample_rep, dm.rep_lin, dm.source_rep_quad, dm.target_rep_quad) == (
         "X_state",

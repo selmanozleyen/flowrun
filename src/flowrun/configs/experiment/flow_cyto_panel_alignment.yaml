@@ -70,9 +70,10 @@ coupling:
   method: fused
   scale_cost: median
   epsilon: 1.0
-  max_iter: 1000
-  tol: 1.0e-9
+  max_iter: 100
+  tol: 1.0e-5
   alpha: 0.5
+  inner_stop_thr: 1.0e-4   # #202 used POT's defaults (1e-9 inside, 1e-9 / 1000 outside): ~1 min per training step
 
 inference:
   generate_from_noise: true
