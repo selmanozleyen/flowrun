@@ -56,7 +56,7 @@ Key concepts
   objects (portable — the run's spec serializes them). See
   ``sckitflow.core._samplers``.
 - **PCA**: optional, fitted on the training split only and written to
-  ``obsm[sample_rep]``, with z-score and whitening. Configured via ``config.preprocessing``; see
+  ``obsm[target_sample_rep]``, with z-score and whitening. Configured via ``config.preprocessing``; see
   ``flowrun.preprocess``.
 - **Inference**: integrates the learned ODE from t=0 to t=1 with ``torchdiffeq``,
   configured via ``ODEInferenceConfig``.
@@ -263,10 +263,10 @@ def main(config: DictConfig) -> float:
     pp = config.preprocessing
     preprocessed = pp.pca is not None or pp.zscore or pp.whitening is not None
     if preprocessed:
-        if pp.pca is None and pp.input_key == config.datamanager.sample_rep:
+        if pp.pca is None and pp.input_key == config.datamanager.target_sample_rep:
             raise ValueError(
-                f"preprocessing.input_key and datamanager.sample_rep are both {pp.input_key!r}: the preprocessing "
-                "would overwrite its own input. Write it to another key (datamanager.sample_rep), which the model "
+                f"preprocessing.input_key and datamanager.target_sample_rep are both {pp.input_key!r}: the preprocessing "
+                "would overwrite its own input. Write it to another key (datamanager.target_sample_rep), which the model "
                 "then reads."
             )
         train_mask = np.concatenate([a.obs[splitter.split_key].isin(["train", "all"]).to_numpy() for a in adatas])
@@ -280,7 +280,7 @@ def main(config: DictConfig) -> float:
             whitening=pp.whitening,
             epsilon=pp.epsilon,
             input_key=pp.input_key,
-            key_added=config.datamanager.sample_rep,
+            key_added=config.datamanager.target_sample_rep,
         )
 
     # Prepare data manager.
@@ -630,7 +630,7 @@ def main(config: DictConfig) -> float:
         # Into the input file: every cell's projection, and the basis that maps predictions back to genes.
         for p, a in zip(paths, adatas, strict=True):
             logger.info(f"Writing the preprocessing into {p}.")
-            write_preprocessing(p, a, config.datamanager.sample_rep, overwrite=pp.overwrite)
+            write_preprocessing(p, a, config.datamanager.target_sample_rep, overwrite=pp.overwrite)
 
     # Capture the edist from the latest validation step.
     val_edist_key = f"val/{EDIST_KEY}"

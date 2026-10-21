@@ -40,6 +40,6 @@ pooled with attention, cell line as the group); `cellflow_smoke` is a small vers
   `shared_source_combination` holds out condition combinations, `shared_source_holdout` holds out chosen
   values of one column (e.g. cell lines).
 - `flowrun.preprocess`: PCA (`scanpy.pp.pca` on dask), z-score and whitening, fitted on the training split
-  (reading only those rows' chunks). Every cell's output goes to `obsm[sample_rep]` and the fitted steps to
+  (reading only those rows' chunks). Every cell's output goes to `obsm[target_sample_rep]` and the fitted steps to
   `uns["preprocessing"]` in the input file; `apply` repeats them on new cells, `inverse` maps predictions back.
 - `flowrun.fit_cfm`: the training entry point.
