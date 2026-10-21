@@ -6,7 +6,7 @@ defaults:
 
 hydra:
   sweep:
-    dir: /lustre/groups/ml01/workspace/lorenzo.consoli/projects/CITEseq_Imputation_Cambridge/data/out/sweeps_smoke
+    dir: ${oc.env:FLOWRUN_SWEEP_DIR,multirun}/panel_sweep_smoke/${now:%Y-%m-%d_%H-%M-%S}
     subdir: trial_${hydra.job.num}
   sweeper:
     n_trials: 1

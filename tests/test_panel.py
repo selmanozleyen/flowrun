@@ -1,5 +1,7 @@
 """The panel imputation experiments (ported from theislab/sckitflow#202)."""
 
+import math
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -61,23 +63,91 @@ def test_panel_smoke_runs(tiny_panel_adata: Path, tmp_path: Path) -> None:
         cfg = compose(config_name="fit_cfm", overrides=overrides)
     assert cfg.coupling.method == "fused" and cfg.module.conditioning_id == "resnet1d"
     score = fit_cfm.main.__wrapped__(cfg)
-    assert isinstance(score, float)
+    assert math.isfinite(score)  # the monitored test/edist was logged, not a missing metric
     assert (tmp_path / "run" / "config.json").is_file()
     assert ad.read_zarr(tiny_panel_adata).obs["split"].value_counts()["test"] == 80  # the prepared split was reused
 
 
+def test_panel_without_a_prepared_split_fails_and_writes_nothing(tiny_panel_adata: Path, tmp_path: Path) -> None:
+    adata = ad.read_zarr(tiny_panel_adata)
+    del adata.obs["split"]
+    path = tmp_path / "no_split.zarr"
+    adata.write_zarr(path)
+    with initialize_config_dir(config_dir=CONFIGS, version_base=None):
+        cfg = compose(config_name="fit_cfm", overrides=["+experiment=panel_smoke", f"paths.target_adata={path}"])
+    with pytest.raises(ValueError, match="Nothing was held out"):
+        fit_cfm.main.__wrapped__(cfg)
+    assert "split" not in ad.read_zarr(path).obs
+
+
+def test_the_panel_contract() -> None:
+    """The panel experiment as ported from theislab/sckitflow#202."""
+    with initialize_config_dir(config_dir=CONFIGS, version_base=None):
+        cfg = compose(config_name="fit_cfm", overrides=["+experiment=panel"])
+    c = cfg.coupling
+    assert (c.method, c.epsilon, c.alpha, c.scale_cost, c.max_iter, c.tol) == ("fused", 1.0, 0.5, "median", 1000, 1e-9)
+    dm = cfg.datamanager
+    assert (dm.sample_rep, dm.rep_lin, dm.source_rep_quad, dm.target_rep_quad, dm.use_linear) == (
+        "X_zscore",
+        "X_lin",
+        "X_quad_src",
+        "X_quad_tgt",
+        True,
+    )
+    assert dict(dm.control_values_dict) == {"panel": "old panel"}
+    assert dict(dm.categorical_reps) == {"panel": "dataset"}
+    assert cfg.module.conditioning_id == "resnet1d" and cfg.module.source_encoder_output_dim == 16
+    assert cfg.training.generate_from_noise and cfg.inference.generate_from_noise
+    assert cfg.callbacks.model_checkpoint.monitor == cfg.callbacks.early_stopping.monitor == "test/edist"
+
+
 @pytest.mark.parametrize("experiment", ["panel_sweep", "panel_sweep_smoke"])
-def test_the_sweep_composes(experiment: str) -> None:
+def test_the_sweep_composes(experiment: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("FLOWRUN_PANEL_DATA", "/data/panel")
+    monkeypatch.delenv("FLOWRUN_SWEEP_DIR", raising=False)
     with initialize_config_dir(config_dir=CONFIGS, version_base=None):
         cfg = compose(config_name="fit_cfm", overrides=[f"+experiment={experiment}"], return_hydra_config=True)
     sweeper, launcher = cfg.hydra.sweeper, cfg.hydra.launcher
     assert sweeper._target_ == "hydra_plugins.hydra_optuna_sweeper.optuna_sweeper.OptunaSweeper"
     assert launcher._target_ == "hydra_plugins.hydra_submitit_launcher.submitit_launcher.SlurmLauncher"
     assert sweeper.sampler._target_ == "optuna.samplers.RandomSampler"
-    assert sweeper.n_trials == (1 if experiment.endswith("smoke") else 30)
-    assert set(sweeper.params) == {"paths.target_adata", "coupling.epsilon", "coupling.alpha", "coupling.scale_cost"}
+    assert sweeper.sampler.seed == 0
+    assert sweeper.direction == "minimize" and sweeper.max_failure_rate == 0.2
+    assert sweeper.n_trials == sweeper.n_jobs == (1 if experiment.endswith("smoke") else 30)
+    assert dict(sweeper.params) == {
+        "paths.target_adata": "choice( "
+        + ", ".join(f"/data/panel/adata_concat_seed{s}/adata_concat.h5ad" for s in range(42, 47))
+        + " )",
+        "coupling.epsilon": "choice(0.5, 1.0, 2.0)",
+        "coupling.alpha": "choice(0.25, 0.5, 0.75)",
+        "coupling.scale_cost": "choice(mean, median)",
+    }
+    assert (launcher.partition, launcher.qos, launcher.gres, launcher.timeout_min) == (
+        "gpu_p",
+        "gpu_normal",
+        "gpu:1",
+        720,
+    )
+    # a fresh timestamped directory per launch, so a relaunch never collides with finished trials
+    assert re.fullmatch(rf"multirun/{experiment}/\d{{4}}-\d\d-\d\d_\d\d-\d\d-\d\d", cfg.hydra.sweep.dir)
 
 
+def test_console_script_finds_its_configs(tmp_path: Path) -> None:
+    """The installed entry point, not `python -m`: Hydra then looks the configs up as the `flowrun.configs` package."""
+    script = Path(sys.executable).parent / "flowrun-fit-cfm"
+    result = subprocess.run(
+        [str(script), "--cfg", "all", "+experiment=panel_sweep_smoke"],
+        check=False,
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        timeout=300,
+    )
+    assert result.returncode == 0, result.stderr[-3000:]
+    assert "method: fused" in result.stdout and "SlurmLauncher" in result.stdout
+
+
+@pytest.mark.slow
 def test_one_sweep_trial_runs_through_optuna(tiny_panel_adata: Path, tmp_path: Path) -> None:
     """The real sweeper and sampler, with Hydra's local launcher standing in for SLURM and the tiny data."""
     result = subprocess.run(

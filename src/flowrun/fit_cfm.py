@@ -32,10 +32,8 @@ Pipeline (in the order ``main`` executes them)
     ``module/model.safetensors``). Training checkpoints are written separately by
     the ``ModelCheckpoint`` callback during ``trainer.fit``. How the run went (optimizer, seeds, batch size) is this config's, not
     the model's.
-11. Return the last validation ``edist`` from ``trainer.callback_metrics``
-    (fallback: ``+inf``) for sweeps / shell exit codes. The key is
-    ``f"{val_name}/edist"`` where ``val_name`` is the first entry of
-    ``datamodule.val_names`` (default ``"val"`` → ``"val/edist"``).
+11. Return the metric ``config.callbacks.model_checkpoint.monitor`` names (e.g. ``"val/edist"``), for sweeps:
+    the checkpoint's best score, else the last logged value, else ``nan`` (a sweep marks that trial failed).
 
 Key concepts
 ------------
@@ -81,8 +79,7 @@ Outputs
   ``config.json`` — the portable ``ModelConfig`` — and ``module/model.safetensors``).
   Reload it with ``sckitflow.Model.from_pretrained(run_dir, adata)`` for
   **inference**.
-- Return value: last ``<val_name>/edist`` from
-  ``trainer.callback_metrics`` (``+inf`` if validation never ran).
+- Return value: the best (else last) value of the monitored metric, ``nan`` if it was never logged.
 """
 
 from pathlib import Path
@@ -632,9 +629,20 @@ def main(config: DictConfig) -> float:
             logger.info(f"Writing the preprocessing into {p}.")
             write_preprocessing(p, a, config.datamanager.sample_rep, overwrite=pp.overwrite)
 
-    # Return the metric the checkpoint watches (e.g. "val/edist"), so a sweep optimizes what the callbacks select on.
+    # Return the metric the checkpoint watches (e.g. "val/edist"), so a sweep optimizes what the callbacks select on:
+    # its best value, or the last logged one when no checkpoint was scored (e.g. under fast_dev_run). NaN when it was
+    # never logged, so a sweep marks the trial failed instead of ranking it.
     monitored = config.callbacks.model_checkpoint.monitor
-    returned_metric = float(trainer.callback_metrics.get(monitored, float("inf")))
+    score = model_checkpoint.best_model_score
+    if score is None:
+        score = trainer.callback_metrics.get(monitored)
+    if score is None:
+        logger.warning(
+            f"The monitored metric {monitored!r} was never logged (logged: {sorted(trainer.callback_metrics)}); "
+            "returning nan."
+        )
+        return float("nan")
+    returned_metric = float(score)
     logger.info(f"Finishing the run with {monitored} of {returned_metric:.4f}")
     return returned_metric
 

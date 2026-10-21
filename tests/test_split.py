@@ -34,3 +34,16 @@ def test_combination_keeps_every_cell_line_in_train():
     per_line = pd.crosstab(OBS["cell_line"], labels)
     assert (per_line["test"] == 2).all() and (per_line["val"] == 1).all() and (per_line["train"] == 2).all()
     assert (labels[IS_SOURCE] == "all").all()
+
+
+@pytest.mark.parametrize(("test_fraction", "val_fraction"), [(0.2, 0.0), (0.0, 0.2)])
+def test_combination_errors_when_nothing_is_held_out(test_fraction, val_fraction):
+    # one target combination per cell line: a 0.2 fraction of one combination holds nothing out
+    with pytest.raises(ValueError, match="Nothing was held out"):
+        shared_source_combination(
+            OBS,
+            ["cell_line"],
+            is_source=IS_SOURCE,
+            test_fraction=test_fraction,
+            val_fraction=val_fraction,
+        )
