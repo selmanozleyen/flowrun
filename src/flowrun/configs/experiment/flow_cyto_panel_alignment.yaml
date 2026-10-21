@@ -1,26 +1,34 @@
 # @package _global_
-# Flow cytometry panel alignment (ported from theislab/sckitflow#202): map cells measured on an old marker panel onto a new
-# one. Fused Gromov-Wasserstein matching (a shared linear term on the markers both panels measure, a quadratic
-# term per panel), `resnet1d` conditioning, and a source encoder: the flow generates from noise conditioned on
-# the encoded old-panel cell.
-#   flowrun-fit-cfm +experiment=flow_cyto_panel_alignment paths.target_adata=/path/to/adata_concat.h5ad save.run_dir=runs/flow_cyto_panel_alignment
-# Expects obs `dataset` ("old panel" / "new panel"), and obsm `X_zscore` (the state), `X_lin` (shared markers),
-# `X_quad_src` / `X_quad_tgt` (each panel's own markers); `uns["dataset"]` embeds the panels.
-# The data must carry a prepared `obs["split"]` (train / test, an 80/20 per-cell split written when preparing it),
-# which is reused. The splitter below holds out whole `dataset` values, and the one target panel cannot be split
-# that way: without a prepared split the run stops with "Nothing was held out" and writes nothing to the input.
+# Flow cytometry panel alignment (ported from theislab/sckitflow#202): map cells measured on an old marker panel onto a
+# new one. Fused Gromov-Wasserstein matching (a shared linear term on the markers both panels measure, a quadratic
+# term per panel), `resnet1d` conditioning, and a source encoder: the flow generates new-panel cells from noise,
+# conditioned on the encoded old-panel cell.
+#   flowrun-fit-cfm +experiment=flow_cyto_panel_alignment save.run_dir=runs/flow_cyto_panel_alignment
+# The inputs are the two panels as prepared by `python -m flowrun.panels` (markers renamed for synonyms, labelled,
+# the steps in `uns["panels"]`). `panels.layer` slices, by marker name, each panel's state (`X_state`), the shared
+# markers (`X_lin`) and its own (`X_quad`) from `layers["logicle_trans"]`, as is. The split is drawn per cell
+# (target panel only; the old panel is every split's source) and written once per seed to obs["split_<seed>"].
+
+paths:
+  target_adata:
+    - /lustre/groups/ml01/datasets/selman.ozleyen/citeseq_panel/prepared/OH_OH0013_OLD_UMAP_annotated_red.zarr
+    - /lustre/groups/ml01/datasets/selman.ozleyen/citeseq_panel/prepared/260331_OH013_New_Panel_annotated_red.zarr
+
+panels:
+  layer: logicle_trans
 
 splitter:
-  type: shared_source_combination
+  type: random_cells
+  split_key: split_${run.splitter_seed}
   source_key: dataset
   source_value: old panel
   group_keys: [dataset]
-  always_train_keys: []
   test_fraction: 0.2
-  val_from_train: 0.1   # the prepared split is train / test only; test stays out of model selection
+  val_fraction: 0.1
 
 datamanager:
-  target_sample_rep: X_zscore
+  target_sample_rep: X_state     # the new panel's markers
+  source_sample_rep: X_state     # the old panel's own markers, read by the source encoder
   categorical_conditions:
     panel: [dataset]
   categorical_reps:
@@ -28,8 +36,8 @@ datamanager:
   control_values_dict:
     panel: old panel
   rep_lin: X_lin
-  source_rep_quad: X_quad_src
-  target_rep_quad: X_quad_tgt
+  source_rep_quad: X_quad
+  target_rep_quad: X_quad
   use_linear: true
 
 datamodule:

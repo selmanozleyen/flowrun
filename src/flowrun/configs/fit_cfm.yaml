@@ -81,7 +81,6 @@ splitter:
   always_train_keys: ["control"]
   test_fraction: 0.2
   val_fraction: 0.1
-  val_from_train: null            # a reused split without val: move this fraction of each group's train rows to val
   key: null
   test: []
   val: []
@@ -414,5 +413,10 @@ run:
 # -----------------------------------------------------------------------------
 # Saved-model directory (`Model.save_pretrained`)
 # -----------------------------------------------------------------------------
+# Inputs on different marker panels, one file per panel (see flowrun.panels): from this layer, each file gets its
+# state (obsm X_state), the markers all files share (X_lin) and its own (X_quad), by marker name. null: one space.
+panels:
+  layer: null
+
 save:
   run_dir: "./runs/cfm_run"

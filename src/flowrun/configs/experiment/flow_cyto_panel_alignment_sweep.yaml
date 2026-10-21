@@ -1,10 +1,10 @@
 # @package _global_
-# Shared settings of the flow_cyto_panel_alignment sweeps (ported from theislab/sckitflow#202): Optuna random draws over the input
-# data, one SLURM job per trial via submitit. Run one of flow_cyto_panel_alignment_sweep_fused / flow_cyto_panel_alignment_sweep_linear, which add the
+# Shared settings of the flow_cyto_panel_alignment sweeps (ported from theislab/sckitflow#202): Optuna random draws over the split
+# seed, one SLURM job per trial via submitit. Run one of flow_cyto_panel_alignment_sweep_fused / flow_cyto_panel_alignment_sweep_linear, which add the
 # coupling axes. Needs the `sweep` extra (`uv sync --extra sweep`) and stable
 # hydra-core 1.3.x (1.4 pre-releases break the Optuna sweeper at composition). See docs/sweeps.md.
 #   flowrun-fit-cfm -m +experiment=flow_cyto_panel_alignment_sweep_fused
-# Needs FLOWRUN_PANEL_DATA, the directory holding `adata_concat_seed{42..46}/adata_concat.h5ad`; trials go to
+# The data axis is the split seed (five per-cell splits of the same two panels); trials go to
 # a fresh timestamped directory under FLOWRUN_SWEEP_DIR (default `multirun`). The launcher is the Helmholtz one.
 defaults:
   - flow_cyto_panel_alignment
@@ -19,20 +19,13 @@ hydra:
     dir: ${oc.env:FLOWRUN_SWEEP_DIR,multirun}/${sweep_name}/${now:%Y-%m-%d_%H-%M-%S}   # a relaunch never collides
   sweeper:
     direction: minimize       # fit_cfm returns the monitored metric (callbacks.model_checkpoint.monitor)
-    max_failure_rate: 0.2     # a few failed (nan) trials do not abort the driver
+    max_failure_rate: 0.2     # a few failed trials do not abort the driver
     sampler:
       seed: 0                 # reproducible draws
     n_jobs: 30
     n_trials: 30
     params:
-      paths.target_adata: >-
-        choice(
-        ${oc.env:FLOWRUN_PANEL_DATA}/adata_concat_seed42/adata_concat.h5ad,
-        ${oc.env:FLOWRUN_PANEL_DATA}/adata_concat_seed43/adata_concat.h5ad,
-        ${oc.env:FLOWRUN_PANEL_DATA}/adata_concat_seed44/adata_concat.h5ad,
-        ${oc.env:FLOWRUN_PANEL_DATA}/adata_concat_seed45/adata_concat.h5ad,
-        ${oc.env:FLOWRUN_PANEL_DATA}/adata_concat_seed46/adata_concat.h5ad
-        )
+      run.splitter_seed: choice(42, 43, 44, 45, 46)
 
 sweep_name: ???   # set by each sweep: its sweep dir, W&B group and run names
 

@@ -79,7 +79,7 @@ Outputs
   ``config.json`` — the portable ``ModelConfig`` — and ``module/model.safetensors``).
   Reload it with ``sckitflow.Model.from_pretrained(run_dir, adata)`` for
   **inference**.
-- Return value: the best (else last) value of the monitored metric, ``nan`` if it was never logged.
+- Return value: the best (else last) value of the monitored metric; an error if it was never logged.
 """
 
 from pathlib import Path
@@ -129,6 +129,7 @@ from sckitflow.trainer import TrainingPlan
 
 from flowrun import split
 from flowrun._store import write_obs_column
+from flowrun.panels import panel_reps
 from flowrun.preprocess import preprocess, write_preprocessing
 
 logger = get_logger(__name__)
@@ -182,6 +183,8 @@ def read_zarr_input(path: Path, config: DictConfig) -> ad.AnnData:
     uns = {*dm.categorical_reps.values(), *dm.groups_reps.values()}
     group = zarr.open_group(path, mode="r")
     keys = ["X", *(f"obsm/{k}" for k in group.get("obsm", {}))]
+    if config.panels.layer is not None:
+        keys.append(f"layers/{config.panels.layer}")
     return load_backed_adata(
         group,
         keys=keys,
@@ -207,24 +210,21 @@ def split_labels(obs, splitter: DictConfig, *, seed: int):
             val_fraction=splitter.val_fraction,
             seed=seed,
         )
+    if splitter.type == "random_cells":
+        return split.random_cells(
+            obs,
+            splitter.group_keys,
+            is_source=is_source,
+            test_fraction=splitter.test_fraction,
+            val_fraction=splitter.val_fraction,
+            seed=seed,
+        )
     if splitter.type == "shared_source_holdout":
         return split.shared_source_holdout(obs, splitter.key, is_source=is_source, test=splitter.test, val=splitter.val)
     raise ValueError(
-        f"Unknown splitter.type {splitter.type!r}; use 'shared_source_combination' or 'shared_source_holdout'."
+        f"Unknown splitter.type {splitter.type!r}; use 'shared_source_combination', 'shared_source_holdout' or "
+        "'random_cells'."
     )
-
-
-def val_from_train(adatas: list[ad.AnnData], splitter: DictConfig, *, train: str, seed: int) -> None:
-    """Moves ``splitter.val_from_train`` of each group's ``train`` rows to ``val``, in memory only, so a split
-    reused from files without a validation split gets one and the files keep theirs."""
-    rng = np.random.default_rng(seed)
-    for a in adatas:
-        labels = a.obs[splitter.split_key].astype(str).to_numpy().copy()
-        groups = a.obs[list(splitter.group_keys)].astype(str).agg("|".join, axis=1).to_numpy()
-        for g in np.unique(groups):
-            rows = np.flatnonzero((groups == g) & (labels == train))
-            labels[rng.choice(rows, size=round(len(rows) * splitter.val_from_train), replace=False)] = "val"
-        a.obs[splitter.split_key] = pd.Categorical(labels)
 
 
 @hydra.main(config_path="configs", config_name="fit_cfm", version_base=None)
@@ -249,6 +249,13 @@ def main(config: DictConfig) -> float:
         f"Read {len(adatas)} file(s): " + ", ".join(f"{p.name} ({a.n_obs} cells)" for p, a in zip(paths, adatas))
     )
 
+    if config.panels.layer is not None:  # one file per marker panel: the reps follow from the marker names
+        reps = panel_reps(adatas, layer=config.panels.layer)
+        logger.info(
+            f"Panel reps from layers[{config.panels.layer!r}]: {len(reps['shared'])} shared markers {reps['shared']}; "
+            "own: " + ", ".join(f"{p.name} {own}" for p, own in zip(paths, reps["own"], strict=True))
+        )
+
     # Split: one label per row in ``obs[splitter.split_key]``, read back as ``split_by``. A split already in the
     # input files is reused, so every model trained on them shares it.
     splitter = config.splitter
@@ -266,11 +273,6 @@ def main(config: DictConfig) -> float:
             a.obs[splitter.split_key] = pd.Categorical(part, categories=labels.cat.categories)
     else:
         logger.info(f"Reusing the split in obs[{splitter.split_key!r}]; set splitter.overwrite=true to re-split.")
-        if splitter.val_from_train and not any((a.obs[splitter.split_key] == "val").any() for a in adatas):
-            logger.info(
-                f"The split has no val: moving {splitter.val_from_train:.0%} of each group's training rows to val."
-            )
-            val_from_train(adatas, splitter, train=config.datamodule.train_split, seed=config.run.splitter_seed)
 
     # Preprocessing is fitted on the training targets and the shared sources, so held-out cells never shape it.
     pp = config.preprocessing
@@ -649,18 +651,18 @@ def main(config: DictConfig) -> float:
             write_preprocessing(p, a, config.datamanager.target_sample_rep, overwrite=pp.overwrite)
 
     # Return the metric the checkpoint watches (e.g. "val/edist"), so a sweep optimizes what the callbacks select on:
-    # its best value, or the last logged one when no checkpoint was scored (e.g. under fast_dev_run). NaN when it was
-    # never logged, so a sweep marks the trial failed instead of ranking it.
+    # its best value, or the last logged one when no checkpoint was scored (e.g. under fast_dev_run). Never logged
+    # raises: the Optuna sweeper counts a raised trial as failed, while a returned nan crashes the whole sweep.
     monitored = config.callbacks.model_checkpoint.monitor
     score = model_checkpoint.best_model_score
     if score is None:
         score = trainer.callback_metrics.get(monitored)
     if score is None:
-        logger.warning(
-            f"The monitored metric {monitored!r} was never logged (logged: {sorted(trainer.callback_metrics)}); "
-            "returning nan."
+        if monitored is None:
+            return float("nan")
+        raise RuntimeError(
+            f"The monitored metric {monitored!r} was never logged (logged: {sorted(trainer.callback_metrics)})."
         )
-        return float("nan")
     returned_metric = float(score)
     logger.info(f"Finishing the run with {monitored} of {returned_metric:.4f}")
     return returned_metric

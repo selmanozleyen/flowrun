@@ -37,6 +37,31 @@ def shared_source_holdout(
     return pd.Series(pd.Categorical(labels), index=obs.index)
 
 
+def random_cells(
+    obs: pd.DataFrame,
+    group_keys: Sequence[str],
+    *,
+    is_source: np.ndarray,
+    test_fraction: float = 0.2,
+    val_fraction: float = 0.1,
+    seed: int = 0,
+) -> pd.Series:
+    """Hold out random target cells, the same fractions within every ``group_keys`` combination.
+
+    For data with too few target groups to hold whole ones out, e.g. one target panel.
+    """
+    rng = np.random.default_rng(seed)
+    labels = np.full(len(obs), "train", dtype=object)
+    groups = obs[list(group_keys)].astype(str).agg("|".join, axis=1).to_numpy() if group_keys else np.zeros(len(obs))
+    for g in np.unique(groups[~is_source]):
+        rows = rng.permutation(np.flatnonzero((groups == g) & ~is_source))
+        n_test, n_val = int(test_fraction * len(rows)), int(val_fraction * len(rows))
+        labels[rows[:n_test]] = "test"
+        labels[rows[n_test : n_test + n_val]] = "val"
+    labels[is_source] = "all"
+    return pd.Series(pd.Categorical(labels), index=obs.index)
+
+
 def shared_source_combination(
     obs: pd.DataFrame,
     group_keys: Sequence[str],

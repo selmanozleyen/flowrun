@@ -1,6 +1,6 @@
 # @package _global_
 # flow_cyto_panel_alignment sweep with linear entropic OT (Sinkhorn) on the shared markers (`X_lin`) only, the baseline for the fused
-# sweep: 30 random draws over input data x reg x scale_cost (30 cells).
+# sweep: 30 random draws over split seed x reg x scale_cost (30 cells).
 #   flowrun-fit-cfm -m +experiment=flow_cyto_panel_alignment_sweep_linear
 defaults:
   - flow_cyto_panel_alignment_sweep

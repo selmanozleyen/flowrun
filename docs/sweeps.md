@@ -3,9 +3,9 @@
 Ported from theislab/sckitflow#202. Two sweeps, each 30 random draws with Optuna's `RandomSampler`, every trial its
 own SLURM job through submitit:
 
-- **fused**: fused Gromov-Wasserstein, over 5 input datasets x `coupling.epsilon` x `coupling.alpha` x
+- **fused**: fused Gromov-Wasserstein, over 5 split seeds x `coupling.epsilon` x `coupling.alpha` x
   `coupling.scale_cost` (90 cells);
-- **linear**: entropic linear OT (Sinkhorn) on the shared markers (`X_lin`) only, over 5 input datasets x
+- **linear**: entropic linear OT (Sinkhorn) on the shared markers (`X_lin`) only, over 5 split seeds x
   `coupling.reg` x `coupling.scale_cost` (30 cells). The baseline for the fused one.
 
 | Config | Role |
@@ -19,23 +19,22 @@ own SLURM job through submitit:
 | `hydra/launcher/helmholtz.yaml` | The SLURM settings (partition, QoS, GPU, time); swap it for another cluster |
 
 Every trial returns the best value of the metric its checkpoint monitors (`callbacks.model_checkpoint.monitor`,
-`val/edist` for the panel data), and Optuna minimises it. A trial that never logs that metric returns `nan` and
+`val/edist` for the panel data), and Optuna minimises it. A trial that never logs that metric raises and
 counts as failed; the sweep tolerates up to 20 % failed trials (`hydra.sweeper.max_failure_rate`). The sampler is
 seeded (`hydra.sweeper.sampler.seed: 0`), so a relaunch draws the same cells.
 
-The prepared panel data splits into train / test only. `splitter.val_from_train: 0.1` moves 10 % of each panel's
-training cells to `val` in memory (the input files keep their split), and `val/edist` drives model selection (early
-stopping, the best checkpoint, and the sweep's choice), so `test` stays unseen until the final evaluation.
+Each run splits the new panel's cells at random into train / val / test (70 / 10 / 20, `splitter.type:
+random_cells`); the old panel is every split's source. `val/edist` drives model selection (early stopping, the best
+checkpoint, and the sweep's choice), so `test` stays unseen until the final evaluation. A seed's split is written to
+`obs["split_<seed>"]` of the inputs the first time and reused after, so every model of a seed shares it.
 
 ## Environment
 
 | Variable | Meaning |
 |---|---|
-| `FLOWRUN_PANEL_DATA` | Required. The directory holding `adata_concat_seed{42..46}/adata_concat.h5ad` |
 | `FLOWRUN_SWEEP_DIR` | Where sweeps go (default `multirun`, relative to the launch directory). Each launch writes a fresh `<FLOWRUN_SWEEP_DIR>/<experiment>/<timestamp>/`, so a relaunch never collides with finished trials |
 
 ```bash
-export FLOWRUN_PANEL_DATA=/lustre/groups/<group>/<you>/panel_data
 export FLOWRUN_SWEEP_DIR=/lustre/groups/<group>/<you>/sweeps
 ```
 
@@ -49,13 +48,21 @@ uv run python -c "import hydra, optuna, hydra_plugins.hydra_optuna_sweeper; prin
 `hydra-core` must be a stable 1.3.x: 1.4 pre-releases break `hydra-optuna-sweeper` at composition
 (`Key '_recursive_' not in 'OptunaSweeperConf'`). The lock pins a 1.3 release.
 
-## 1. Prepare the five pre-split inputs
+## 1. Prepare the two panels
 
-Each input carries `obs["split"]` = `train` / `test` (an 80/20 per-cell split). `fit_cfm` reuses a split column
-already in the file and skips its own splitter. The column is required: the panel splitter cannot hold out part of
-the single target panel, so without it a run stops with `Nothing was held out` and leaves the file untouched. The
-inputs are written by Lorenzo's `prepare_panel_adata.py` (not part of this repository), one per split seed; the
-sweep reads them from `$FLOWRUN_PANEL_DATA`.
+Once, from the original panels: rename the synonyms, label the panels, and write one zarr each (the steps are kept
+in `uns["panels"]`, the original names in `var["original_name"]`). The values stay as they are; `fit_cfm` reads
+`layers["logicle_trans"]` and takes the shared and own markers by name (`panels.layer`, see `flowrun.panels`).
+
+```bash
+D=/lustre/groups/ml01/workspace/lorenzo.consoli/projects/CITEseq_Imputation_Cambridge/data/CITEseq-imputation
+uv run python -m flowrun.panels --out /lustre/groups/ml01/datasets/$USER/citeseq_panel/prepared \
+  --rename CD41a=CD41 EPCR=CD201 \
+  --panel "old panel" $D/OH_OH0013_OLD_UMAP_annotated_red.h5ad \
+  --panel "new panel" $D/260331_OH013_New_Panel_annotated_red.h5ad
+```
+
+That gives 16 shared markers, 7 old-only and 12 new-only. The experiment configs read the outputs from there.
 
 ## 2. Smoke test
 
@@ -145,6 +152,4 @@ concentrates trials around good regions.
 | `Key 'partition' not in 'BasicLauncherConf'` | The SLURM settings belong to the `helmholtz` launcher; another launcher needs its own config |
 | `Hydra15MigrationWarning` about `version_base` | Harmless on hydra-core 1.3 |
 | `File exists: .../save` on a retried trial | A preempted trial left a partial directory: remove it, or set `run.allow_overwrite=true` |
-| `Nothing was held out` | The input has no prepared `obs["split"]`; write the 80/20 split when preparing the data |
-| `oc.env` error naming `FLOWRUN_PANEL_DATA` | Export it (see Environment) |
 | `Sinkhorn did not converge` | Harmless unless the metric plateaus; try a larger `coupling.epsilon` |

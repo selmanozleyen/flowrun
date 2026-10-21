@@ -1,6 +1,6 @@
 # @package _global_
 # The flow_cyto_panel_alignment experiment at toy size, for checking the wiring in seconds on CPU:
-#   flowrun-fit-cfm +experiment=flow_cyto_panel_alignment_smoke paths.target_adata=/path/to/adata_concat.h5ad save.run_dir=runs/smoke
+#   flowrun-fit-cfm +experiment=flow_cyto_panel_alignment_smoke save.run_dir=runs/smoke
 defaults:
   - flow_cyto_panel_alignment
 
