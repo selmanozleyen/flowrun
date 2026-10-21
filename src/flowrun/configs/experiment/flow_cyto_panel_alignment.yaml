@@ -1,9 +1,9 @@
 # @package _global_
-# Panel imputation (ported from theislab/sckitflow#202): map cells measured on an old marker panel onto a new
+# Flow cytometry panel alignment (ported from theislab/sckitflow#202): map cells measured on an old marker panel onto a new
 # one. Fused Gromov-Wasserstein matching (a shared linear term on the markers both panels measure, a quadratic
 # term per panel), `resnet1d` conditioning, and a source encoder: the flow generates from noise conditioned on
 # the encoded old-panel cell.
-#   flowrun-fit-cfm +experiment=panel paths.target_adata=/path/to/adata_concat.h5ad save.run_dir=runs/panel
+#   flowrun-fit-cfm +experiment=flow_cyto_panel_alignment paths.target_adata=/path/to/adata_concat.h5ad save.run_dir=runs/flow_cyto_panel_alignment
 # Expects obs `dataset` ("old panel" / "new panel"), and obsm `X_zscore` (the state), `X_lin` (shared markers),
 # `X_quad_src` / `X_quad_tgt` (each panel's own markers); `uns["dataset"]` embeds the panels.
 # The data must carry a prepared `obs["split"]` (train / test, an 80/20 per-cell split written when preparing it),
@@ -96,6 +96,6 @@ run:
 loggers:
   wandb:
     project: sckitflow
-    name: cfm-panel
+    name: flow-cyto-panel-alignment
   csv:
-    name: cfm-panel
+    name: flow-cyto-panel-alignment

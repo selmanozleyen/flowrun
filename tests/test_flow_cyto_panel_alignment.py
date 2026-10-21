@@ -50,7 +50,7 @@ def tiny_panel_adata(tmp_path: Path) -> Path:
 
 def test_panel_smoke_runs(tiny_panel_adata: Path, tmp_path: Path) -> None:
     overrides = [
-        "+experiment=panel_smoke",
+        "+experiment=flow_cyto_panel_alignment_smoke",
         f"paths.target_adata={tiny_panel_adata}",
         f"save.run_dir={tmp_path / 'run'}",
         f"callbacks.model_checkpoint.dirpath={tmp_path / 'ckpt'}",
@@ -74,7 +74,10 @@ def test_panel_without_a_prepared_split_fails_and_writes_nothing(tiny_panel_adat
     path = tmp_path / "no_split.zarr"
     adata.write_zarr(path)
     with initialize_config_dir(config_dir=CONFIGS, version_base=None):
-        cfg = compose(config_name="fit_cfm", overrides=["+experiment=panel_smoke", f"paths.target_adata={path}"])
+        cfg = compose(
+            config_name="fit_cfm",
+            overrides=["+experiment=flow_cyto_panel_alignment_smoke", f"paths.target_adata={path}"],
+        )
     with pytest.raises(ValueError, match="Nothing was held out"):
         fit_cfm.main.__wrapped__(cfg)
     assert "split" not in ad.read_zarr(path).obs
@@ -83,7 +86,7 @@ def test_panel_without_a_prepared_split_fails_and_writes_nothing(tiny_panel_adat
 def test_the_panel_contract() -> None:
     """The panel experiment as ported from theislab/sckitflow#202."""
     with initialize_config_dir(config_dir=CONFIGS, version_base=None):
-        cfg = compose(config_name="fit_cfm", overrides=["+experiment=panel"])
+        cfg = compose(config_name="fit_cfm", overrides=["+experiment=flow_cyto_panel_alignment"])
     c = cfg.coupling
     assert (c.method, c.epsilon, c.alpha, c.scale_cost, c.max_iter, c.tol) == ("fused", 1.0, 0.5, "median", 1000, 1e-9)
     dm = cfg.datamanager
@@ -101,8 +104,23 @@ def test_the_panel_contract() -> None:
     assert cfg.callbacks.model_checkpoint.monitor == cfg.callbacks.early_stopping.monitor == "test/edist"
 
 
-@pytest.mark.parametrize("experiment", ["panel_sweep", "panel_sweep_smoke"])
-def test_the_sweep_composes(experiment: str, monkeypatch: pytest.MonkeyPatch) -> None:
+FUSED = {
+    "coupling.epsilon": "choice(0.5, 1.0, 2.0)",
+    "coupling.alpha": "choice(0.25, 0.5, 0.75)",
+    "coupling.scale_cost": "choice(mean, median)",
+}
+LINEAR = {"coupling.reg": "choice(0.05, 0.1, 0.5)", "coupling.scale_cost": "choice(mean, median)"}
+
+
+@pytest.mark.parametrize(
+    ("experiment", "axes"),
+    [
+        ("flow_cyto_panel_alignment_sweep_fused", FUSED),
+        ("flow_cyto_panel_alignment_sweep_linear", LINEAR),
+        ("flow_cyto_panel_alignment_sweep_smoke", FUSED),
+    ],
+)
+def test_the_sweep_composes(experiment: str, axes: dict, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("FLOWRUN_PANEL_DATA", "/data/panel")
     monkeypatch.delenv("FLOWRUN_SWEEP_DIR", raising=False)
     with initialize_config_dir(config_dir=CONFIGS, version_base=None):
@@ -118,9 +136,7 @@ def test_the_sweep_composes(experiment: str, monkeypatch: pytest.MonkeyPatch) ->
         "paths.target_adata": "choice( "
         + ", ".join(f"/data/panel/adata_concat_seed{s}/adata_concat.h5ad" for s in range(42, 47))
         + " )",
-        "coupling.epsilon": "choice(0.5, 1.0, 2.0)",
-        "coupling.alpha": "choice(0.25, 0.5, 0.75)",
-        "coupling.scale_cost": "choice(mean, median)",
+        **axes,
     }
     assert (launcher.partition, launcher.qos, launcher.gres, launcher.timeout_min) == (
         "gpu_p",
@@ -128,6 +144,10 @@ def test_the_sweep_composes(experiment: str, monkeypatch: pytest.MonkeyPatch) ->
         "gpu:1",
         720,
     )
+    assert cfg.coupling.method == ("sinkhorn" if experiment.endswith("linear") else "fused")
+    if experiment.endswith("linear"):  # matched on the shared markers only
+        assert cfg.datamanager.source_rep_quad is None and cfg.datamanager.target_rep_quad is None
+    assert cfg.loggers.wandb.init_kwargs.group == experiment
     # a fresh timestamped directory per launch, so a relaunch never collides with finished trials
     assert re.fullmatch(rf"multirun/{experiment}/\d{{4}}-\d\d-\d\d_\d\d-\d\d-\d\d", cfg.hydra.sweep.dir)
 
@@ -136,7 +156,7 @@ def test_console_script_finds_its_configs(tmp_path: Path) -> None:
     """The installed entry point, not `python -m`: Hydra then looks the configs up as the `flowrun.configs` package."""
     script = Path(sys.executable).parent / "flowrun-fit-cfm"
     result = subprocess.run(
-        [str(script), "--cfg", "all", "+experiment=panel_sweep_smoke"],
+        [str(script), "--cfg", "all", "+experiment=flow_cyto_panel_alignment_sweep_smoke"],
         check=False,
         cwd=tmp_path,
         capture_output=True,
@@ -156,7 +176,7 @@ def test_one_sweep_trial_runs_through_optuna(tiny_panel_adata: Path, tmp_path: P
             "-m",
             "flowrun.fit_cfm",
             "-m",
-            "+experiment=panel_sweep_smoke",
+            "+experiment=flow_cyto_panel_alignment_sweep_smoke",
             "hydra/launcher=basic",
             f"hydra.sweep.dir={tmp_path / 'sweep'}",
             f"hydra.sweeper.params={{paths.target_adata:'choice({tiny_panel_adata})'}}",  # the tiny data instead

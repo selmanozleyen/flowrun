@@ -1,6 +1,6 @@
 # @package hydra.launcher
 # One SLURM job per trial on the Helmholtz GPU partition (submitit). Pick another launcher for another cluster:
-#   flowrun-fit-cfm -m +experiment=panel_sweep hydra/launcher=<yours>
+#   flowrun-fit-cfm -m +experiment=flow_cyto_panel_alignment_sweep_fused hydra/launcher=<yours>
 defaults:
   - submitit_slurm
 
