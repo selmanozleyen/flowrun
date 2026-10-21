@@ -5,11 +5,9 @@ for synonyms such as ``EPCR`` / ``CD201``; the original names stay in ``var["ori
 ``obs[label_key]``, the labels' one-hot table in ``uns[label_key]`` (sorted label order) and these steps in
 ``uns["panels"]``. No split and no transform: ``fit_cfm`` splits and writes ``obs["split_<seed>"]`` back.
 
-:func:`panel_reps` runs in ``fit_cfm`` (``panels.layer``): from one layer, as is, each file gets in memory
-
-- ``obsm["X_state"]``: all of its markers, the state;
-- ``obsm["X_lin"]``: the markers every file measures, by name, sorted, the coupling's shared term;
-- ``obsm["X_quad"]``: its own markers, sorted, the coupling's quadratic term.
+:func:`from_state` runs in ``fit_cfm``: a ``datamanager`` state given as ``layers/<key>`` (or ``X``), and the coupling
+terms declared from it (``lin_from_state``: the features every file measures, by name, sorted; ``quad_from_state``:
+each file's own features, sorted), become the in-memory ``obsm`` reps sckitflow reads.
 
 These follow Lorenzo's ``prepare_panel_adata_nosplit.py`` (theislab/sckitflow#202), plus the renames and the state.
 
@@ -46,21 +44,60 @@ def prepare_panels(
         a.uns["panels"] = {"panel": label, "label_key": label_key, "rename": dict(rename)}
 
 
-def panel_reps(adatas: Sequence[ad.AnnData], *, layer: str) -> dict:
-    """Adds each file's state, shared and own markers from ``layers[layer]``, in place (see the module)."""
+_STATE, _SHARED, _OWN = "state_from_layer", "shared_features", "own_features"
+
+
+def _state_values(a: ad.AnnData, loc: str | None) -> np.ndarray:
+    if loc in (None, "X"):
+        return np.asarray(a.X[:], dtype=np.float32)
+    return np.asarray(a.layers[loc.removeprefix("layers/")][:], dtype=np.float32)
+
+
+def from_state(adatas: Sequence[ad.AnnData], datamanager: Mapping) -> tuple[dict, dict | None]:
+    """The ``datamanager`` config sckitflow takes, with ``layers/`` states and the from-state coupling terms resolved.
+
+    Adds the reps to each file's ``obsm``, in memory. Returns the config and, when coupling terms were derived, the
+    shared and per-file own features.
+    """
+    dm = dict(datamanager)
+    lin, quad = dm.pop("lin_from_state", False), dm.pop("quad_from_state", False)
+    target, source = dm.get("target_sample_rep"), dm.get("source_sample_rep")
+    named = target in (None, "X") or str(target).startswith("layers/")
+    if (lin or quad) and (not named or source not in (None, target)):
+        raise ValueError(
+            "lin_from_state / quad_from_state take the features by name, so the state must be `X` or `layers/<key>`, "
+            f"the same for sources and targets; got target_sample_rep={target!r}, source_sample_rep={source!r}."
+        )
+    if lin and dm.get("rep_lin") is not None:
+        raise ValueError("Set either rep_lin or lin_from_state, not both.")
+    if quad and (dm.get("source_rep_quad") is not None or dm.get("target_rep_quad") is not None):
+        raise ValueError("Set either source_rep_quad / target_rep_quad or quad_from_state, not both.")
+    if str(target).startswith("layers/"):
+        for a in adatas:
+            a.obsm[_STATE] = _state_values(a, target)
+        dm["target_sample_rep"] = _STATE
+        if source == target:
+            dm["source_sample_rep"] = _STATE
+    if not (lin or quad):
+        return dm, None
+
     names = [list(a.var_names) for a in adatas]
     shared = sorted(set(names[0]).intersection(*names[1:]))
     if not shared:
-        raise ValueError("The panels share no marker; map synonyms with `python -m flowrun.panels --rename`.")
+        raise ValueError("The files share no feature name; rename synonyms when preparing them.")
     own = []
     for a, n in zip(adatas, names, strict=True):
-        values = np.asarray(a.layers[layer][:], dtype=np.float32)
-        col = {v: i for i, v in enumerate(n)}
+        values, col = _state_values(a, target), {v: i for i, v in enumerate(n)}
         own.append(sorted(set(n) - set(shared)))
-        a.obsm["X_state"] = values
-        a.obsm["X_lin"] = values[:, [col[v] for v in shared]]
-        a.obsm["X_quad"] = values[:, [col[v] for v in own[-1]]]
-    return {"layer": layer, "shared": shared, "own": own}
+        if lin:
+            a.obsm[_SHARED] = values[:, [col[v] for v in shared]]
+        if quad:
+            a.obsm[_OWN] = values[:, [col[v] for v in own[-1]]]
+    if lin:
+        dm["rep_lin"] = _SHARED
+    if quad:
+        dm["source_rep_quad"] = dm["target_rep_quad"] = _OWN
+    return dm, {"shared": shared, "own": own}
 
 
 def main(argv: Sequence[str] | None = None) -> None:

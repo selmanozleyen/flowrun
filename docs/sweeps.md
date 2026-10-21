@@ -5,7 +5,7 @@ own SLURM job through submitit:
 
 - **fused**: fused Gromov-Wasserstein, over 5 split seeds x `coupling.epsilon` x `coupling.alpha` x
   `coupling.scale_cost` (90 cells);
-- **linear**: entropic linear OT (Sinkhorn) on the shared markers (`X_lin`) only, over 5 split seeds x
+- **linear**: entropic linear OT (Sinkhorn) on the shared markers only, over 5 split seeds x
   `coupling.reg` x `coupling.scale_cost` (30 cells). The baseline for the fused one.
 
 | Config | Role |
@@ -53,7 +53,7 @@ uv run python -c "import hydra, optuna, hydra_plugins.hydra_optuna_sweeper; prin
 Once per dataset, a project renames synonyms, labels each file as a panel (`obs` and its one-hot `uns` table) and
 writes one zarr per panel, then sets `paths.target_adata` to them; for the CITE-seq panels that is
 `python -m flow_cytometry_imputation.prepare` and the `citeseq*` experiments in theislab/flow-cytometry-imputation.
-`fit_cfm` reads `panels.layer` and takes the shared and own markers by name (`flowrun.panels.panel_reps`).
+`fit_cfm` takes the shared and own markers by name from the state (`lin_from_state` / `quad_from_state`).
 
 ## 2. Smoke test
 

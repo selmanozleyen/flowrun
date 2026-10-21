@@ -80,19 +80,40 @@ def test_prepare_panels_renames_labels_and_records(prepared_by_script: list[Path
     assert set(old.obs["dataset"]) == {"old panel"} and set(new.obs["dataset"]) == {"new panel"}
     np.testing.assert_array_equal(new.uns["dataset"]["new panel"], [1, 0])  # sorted labels, as in #202
     assert dict(old.uns["panels"]["rename"]) == {"EPCR": "CD201"}
-    assert not set(old.obsm) & {"X_state", "X_lin", "X_quad"}  # the reps follow from the names at load time
+    assert not set(old.obsm) & {"state_from_layer", "shared_features", "own_features"}  # derived at load time
 
 
-def test_panel_reps_by_marker_name(tiny_panels: list[Path]) -> None:
+def test_coupling_terms_from_the_state_by_feature_name(tiny_panels: list[Path]) -> None:
     old, new = (ad.read_zarr(p) for p in tiny_panels)
-    reps = panels.panel_reps([old, new], layer="logicle_trans")
-    assert reps["shared"] == sorted([*(f"shared_{i}" for i in range(6)), "CD201"])
-    assert reps["own"] == [["old_0", "old_1"], ["new_0", "new_1", "new_2"]]
-    i = list(new.var_names).index("CD201")
+    state = {"target_sample_rep": "layers/logicle_trans", "source_sample_rep": "layers/logicle_trans"}
+    dm, features = panels.from_state([old, new], {**state, "lin_from_state": True, "quad_from_state": True})
+    assert features["shared"] == sorted([*(f"shared_{i}" for i in range(6)), "CD201"])
+    assert features["own"] == [["old_0", "old_1"], ["new_0", "new_1", "new_2"]]
+    assert dm["target_sample_rep"] == dm["source_sample_rep"] and dm["rep_lin"] and dm["source_rep_quad"]
+    assert "lin_from_state" not in dm and "quad_from_state" not in dm  # sckitflow gets plain reps
+    col = list(new.var_names)
     np.testing.assert_array_equal(
-        new.obsm["X_lin"][:, reps["shared"].index("CD201")], new.layers["logicle_trans"][:, i]
+        new.obsm[dm["rep_lin"]][:, features["shared"].index("CD201")],
+        new.layers["logicle_trans"][:, col.index("CD201")],
     )
-    assert old.obsm["X_state"].shape == (200, 9) and new.obsm["X_quad"].shape == (200, 3)
+    np.testing.assert_array_equal(new.obsm[dm["target_sample_rep"]], new.layers["logicle_trans"])
+    assert old.obsm[dm["source_rep_quad"]].shape == (200, 2) and new.obsm[dm["target_rep_quad"]].shape == (200, 3)
+
+    lin_only, _ = panels.from_state([old, new], {**state, "lin_from_state": True})
+    assert lin_only.get("source_rep_quad") is None
+
+
+@pytest.mark.parametrize(
+    ("dm", "match"),
+    [
+        ({"target_sample_rep": "X_pca", "lin_from_state": True}, "the state must be `X` or `layers/<key>`"),
+        ({"target_sample_rep": "X", "rep_lin": "X_pca", "lin_from_state": True}, "either rep_lin or lin_from_state"),
+        ({"target_sample_rep": "X", "target_rep_quad": "X_q", "quad_from_state": True}, "or quad_from_state, not both"),
+    ],
+)
+def test_coupling_terms_from_the_state_refuse(tiny_panels: list[Path], dm: dict, match: str) -> None:
+    with pytest.raises(ValueError, match=re.escape(match)):
+        panels.from_state([ad.read_zarr(p) for p in tiny_panels], dm)
 
 
 def test_random_cells_splits_targets_per_group_and_shares_sources() -> None:
@@ -124,9 +145,9 @@ def test_panel_smoke_runs(tiny_panels: list[Path], tmp_path: Path) -> None:
     old, new = (ad.read_zarr(p) for p in tiny_panels)
     assert set(old.obs["split_42"]) == {"all"}  # the seed's split, written back; sources are every split's
     assert new.obs["split_42"].astype(str).value_counts().to_dict() == {"train": 140, "test": 40, "val": 20}
-    assert not set(new.obsm) & {"X_state", "X_lin", "X_quad"}  # the reps stay in memory
+    assert not set(new.obsm) & {"state_from_layer", "shared_features", "own_features"}  # the reps stay in memory
     hparams = yaml.safe_load(next((tmp_path / "csv").rglob("hparams.yaml")).read_text())
-    assert hparams["coupling"]["method"] == "fused" and hparams["panels"]["layer"] == "logicle_trans"  # resolved config
+    assert hparams["coupling"]["method"] == "fused" and hparams["datamanager"]["lin_from_state"]  # resolved config
     (resolved,) = (tmp_path / "wandb").rglob("config_resolved.yaml")
     assert yaml.safe_load(resolved.read_text())["splitter"]["split_key"] == "split_42"  # interpolations resolved
 
@@ -165,14 +186,8 @@ def test_the_panel_contract() -> None:
         1e-4,
     )
     dm = cfg.datamanager
-    assert (dm.target_sample_rep, dm.source_sample_rep, dm.rep_lin, dm.source_rep_quad, dm.target_rep_quad) == (
-        "X_state",
-        "X_state",
-        "X_lin",
-        "X_quad",
-        "X_quad",
-    )
-    assert cfg.panels.layer == "logicle_trans" and cfg.splitter.type == "random_cells"
+    assert dm.target_sample_rep == dm.source_sample_rep == "layers/logicle_trans"
+    assert dm.lin_from_state and dm.quad_from_state and cfg.splitter.type == "random_cells"
     assert dm.split_by == cfg.splitter.split_key == "split_42"
     assert dict(dm.control_values_dict) == {"panel": "old panel"}
     assert dict(dm.categorical_reps) == {"panel": "dataset"}
@@ -214,7 +229,7 @@ def test_the_sweep_composes(experiment: str, axes: dict, monkeypatch: pytest.Mon
     }
     assert cfg.coupling.method == ("sinkhorn" if experiment.endswith("linear") else "fused")
     if experiment.endswith("linear"):  # matched on the shared markers only
-        assert cfg.datamanager.source_rep_quad is None and cfg.datamanager.target_rep_quad is None
+        assert not cfg.datamanager.quad_from_state
     assert cfg.loggers.wandb.init_kwargs.group == experiment
     # a fresh timestamped directory per launch, so a relaunch never collides with finished trials
     assert re.fullmatch(rf"multirun/{experiment}/\d{{4}}-\d\d-\d\d_\d\d-\d\d-\d\d", cfg.hydra.sweep.dir)

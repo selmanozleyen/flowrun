@@ -5,15 +5,12 @@
 # conditioned on the encoded old-panel cell.
 #   flowrun-fit-cfm +experiment=flow_cyto_panel_alignment save.run_dir=runs/flow_cyto_panel_alignment
 # The inputs are the two panels as prepared by `python -m flowrun.panels` (markers renamed for synonyms, labelled,
-# the steps in `uns["panels"]`). `panels.layer` slices, by marker name, each panel's state (`X_state`), the shared
-# markers (`X_lin`) and its own (`X_quad`) from `layers["logicle_trans"]`, as is. The split is drawn per cell
+# the steps in `uns["panels"]`). The state is each panel's `layers["logicle_trans"]`, as is; the coupling compares
+# the markers both panels measure (by name) and each panel's own markers. The split is drawn per cell
 # (target panel only; the old panel is every split's source) and written once per seed to obs["split_<seed>"].
 
 paths:
   target_adata: ???   # [old panel zarr, new panel zarr]: a project supplies them (e.g. theislab/flow-cytometry-imputation)
-
-panels:
-  layer: logicle_trans
 
 splitter:
   type: random_cells
@@ -25,17 +22,16 @@ splitter:
   val_fraction: 0.1
 
 datamanager:
-  target_sample_rep: X_state     # the new panel's markers
-  source_sample_rep: X_state     # the old panel's own markers, read by the source encoder
+  target_sample_rep: layers/logicle_trans   # the new panel's markers
+  source_sample_rep: layers/logicle_trans   # the old panel's own markers, read by the source encoder
   categorical_conditions:
     panel: [dataset]
   categorical_reps:
     panel: dataset
   control_values_dict:
     panel: old panel
-  rep_lin: X_lin
-  source_rep_quad: X_quad
-  target_rep_quad: X_quad
+  lin_from_state: true    # the shared markers
+  quad_from_state: true   # each panel's own markers
   use_linear: true
 
 datamodule:

@@ -129,7 +129,7 @@ from sckitflow.trainer import TrainingPlan
 
 from flowrun import split
 from flowrun._store import write_obs_column
-from flowrun.panels import panel_reps
+from flowrun.panels import from_state
 from flowrun.preprocess import preprocess, write_preprocessing
 
 logger = get_logger(__name__)
@@ -183,8 +183,7 @@ def read_zarr_input(path: Path, config: DictConfig) -> ad.AnnData:
     uns = {*dm.categorical_reps.values(), *dm.groups_reps.values()}
     group = zarr.open_group(path, mode="r")
     keys = ["X", *(f"obsm/{k}" for k in group.get("obsm", {}))]
-    if config.panels.layer is not None:
-        keys.append(f"layers/{config.panels.layer}")
+    keys += sorted({r for r in (dm.target_sample_rep, dm.source_sample_rep) if str(r).startswith("layers/")})
     return load_backed_adata(
         group,
         keys=keys,
@@ -250,11 +249,12 @@ def main(config: DictConfig) -> float:
         f"Read {len(adatas)} file(s): " + ", ".join(f"{p.name} ({a.n_obs} cells)" for p, a in zip(paths, adatas))
     )
 
-    if config.panels.layer is not None:  # one file per marker panel: the reps follow from the marker names
-        reps = panel_reps(adatas, layer=config.panels.layer)
+    # `layers/` states and coupling terms declared from the state, as the obsm reps sckitflow reads (in memory).
+    datamanager, features = from_state(adatas, OmegaConf.to_container(config.datamanager, resolve=True))
+    if features is not None:
         logger.info(
-            f"Panel reps from layers[{config.panels.layer!r}]: {len(reps['shared'])} shared markers {reps['shared']}; "
-            "own: " + ", ".join(f"{p.name} {own}" for p, own in zip(paths, reps["own"], strict=True))
+            f"Coupling terms from the state: {len(features['shared'])} shared features {features['shared']}; own: "
+            + ", ".join(f"{p.name} {own}" for p, own in zip(paths, features["own"], strict=True))
         )
 
     # Split: one label per row in ``obs[splitter.split_key]``, read back as ``split_by``. A split already in the
@@ -304,7 +304,7 @@ def main(config: DictConfig) -> float:
     # in the ``datamodule``, of which it is an attribute.
     logger.info("Initializing datamanager.")
     # Plain containers: an OmegaConf node inside the spec cannot be saved with the model.
-    dm_cfg = DataManagerConfig(**OmegaConf.to_container(config.datamanager, resolve=True))
+    dm_cfg = DataManagerConfig(**datamanager)
 
     # Initialize datamodule.
     # The loaders' sampling schedule is seeded from ``config.run.loader_seed`` for reproducibility.

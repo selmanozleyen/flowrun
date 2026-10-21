@@ -88,7 +88,7 @@ splitter:
 # -----------------------------------------------------------------------------
 # DataManager (`DataManagerConfig`)
 #
-#   target_sample_rep      .obsm key of the targets' state, the space the flow lives in (e.g. "X_pca")
+#   target_sample_rep      the targets' state, the space the flow lives in: an .obsm key (e.g. "X_pca"), "X" or "layers/<key>"
 #   source_sample_rep      .obsm key of the sources' own state, if they have one (needs a source encoder)
 #   conditions             obs columns defining the conditional variables
 #   conditions_reps        per-condition representation overrides
@@ -120,6 +120,10 @@ datamanager:
   source_rep_quad: null
   target_rep_quad: null
   use_linear: true
+  # Coupling terms from the state's feature names (state `X` or `layers/<key>`, the same for sources and targets):
+  # lin = the features every input file measures, quad = each file's own. Instead of rep_lin / *_rep_quad.
+  lin_from_state: false
+  quad_from_state: false
 
 # -----------------------------------------------------------------------------
 # DataModule (`FlowDataModule`)
@@ -417,10 +421,5 @@ run:
 # -----------------------------------------------------------------------------
 # Saved-model directory (`Model.save_pretrained`)
 # -----------------------------------------------------------------------------
-# Inputs on different marker panels, one file per panel (see flowrun.panels): from this layer, each file gets its
-# state (obsm X_state), the markers all files share (X_lin) and its own (X_quad), by marker name. null: one space.
-panels:
-  layer: null
-
 save:
   run_dir: "./runs/cfm_run"
