@@ -132,3 +132,23 @@ def test_cellflow_flows_from_the_controls_and_genot_from_noise():
         genot = compose(config_name="fit_cfm", overrides=["+experiment=[cellflow,genot]"])
     assert not cellflow.training.generate_from_noise and not cellflow.inference.generate_from_noise
     assert genot.training.generate_from_noise and genot.module.source_encoder_mlp_kwargs is not None
+
+
+def test_one_out_dir_places_every_output():
+    with initialize_config_dir(config_dir=str(Path(fit_cfm.__file__).parent / "configs"), version_base=None):
+        cfg = compose(config_name="fit_cfm", overrides=["paths.out_dir=/runs/x"], return_hydra_config=True)
+    assert (
+        cfg.save.run_dir,
+        cfg.callbacks.model_checkpoint.dirpath,
+        cfg.trainer.default_root_dir,
+        cfg.loggers.wandb.save_dir,
+        cfg.loggers.csv.save_dir,
+        cfg.hydra.run.dir,
+    ) == (
+        "/runs/x/save",
+        "/runs/x/checkpoints",
+        "/runs/x/logs",
+        "/runs/x/logs/wandb",
+        "/runs/x/logs/csv",
+        "/runs/x/hydra",
+    )

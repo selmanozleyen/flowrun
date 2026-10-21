@@ -1,6 +1,6 @@
 # @package _global_
 # CellFlow, scaled down to check the wiring in a few minutes on CPU:
-#   flowrun-fit-cfm +experiment=cellflow_smoke paths.target_adata=/path/to/data.zarr save.run_dir=runs/smoke
+#   flowrun-fit-cfm +experiment=cellflow_smoke paths.target_adata=/path/to/data.zarr paths.out_dir=runs/<name>
 defaults:
   - cellflow
 

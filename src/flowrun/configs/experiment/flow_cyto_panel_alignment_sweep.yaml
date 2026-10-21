@@ -29,20 +29,16 @@ hydra:
 sweep_name: ???   # set by each sweep: its sweep dir, W&B group and run names
 
 # Every writer under the trial's own output directory.
-save:
-  run_dir: ${hydra:runtime.output_dir}/save
+paths:
+  out_dir: ${hydra:runtime.output_dir}
 callbacks:
   early_stopping:
     patience: 10
-  model_checkpoint:
-    dirpath: ${hydra:runtime.output_dir}/checkpoints
 trainer:
-  default_root_dir: ${hydra:runtime.output_dir}/logs
   max_epochs: 30
   enable_progress_bar: false
 loggers:
   wandb:
-    save_dir: ${hydra:runtime.output_dir}/logs/wandb
     name: ${sweep_name}-trial-${hydra:job.num}
     offline: true
     init_kwargs:
@@ -50,7 +46,6 @@ loggers:
       job_type: random_search
       tags: [flow_cyto_panel_alignment, "${sweep_name}", "trial_${hydra:job.num}"]
   csv:
-    save_dir: ${hydra:runtime.output_dir}/logs/csv
     name: ${sweep_name}-trial-${hydra:job.num}
 run:
   allow_overwrite: false

@@ -12,15 +12,13 @@
 # -----------------------------------------------------------------------------
 # Hydra runtime
 #
-# By default Hydra chdirs into `outputs/<date>/<time>/` before calling
-# `main()`, which makes every relative path below resolve inside that output
-# tree. Disable chdir so `save.run_dir`, `model_checkpoint.dirpath`, and logger
-# `save_dir` resolve from the launch directory. Set to true only if you want
-# the `outputs/` isolation AND use absolute paths elsewhere.
+# No chdir: every output goes under `paths.out_dir` (Hydra's own files too), resolved from the launch directory.
 # -----------------------------------------------------------------------------
 hydra:
   job:
     chdir: false
+  run:
+    dir: ${paths.out_dir}/hydra
 
 # -----------------------------------------------------------------------------
 # Input data paths
@@ -31,6 +29,7 @@ hydra:
 # -----------------------------------------------------------------------------
 paths:
   target_adata: "/abs/path/to/target.zarr"
+  out_dir: ./runs/${now:%Y-%m-%d_%H-%M-%S}   # the run's outputs: save/, checkpoints/, logs/, hydra/
 
 # -----------------------------------------------------------------------------
 # Probability path (`get_probability_path_cfg`)
@@ -301,7 +300,7 @@ training_plan:
 loggers:
   wandb:
     name: "cfm-run"
-    save_dir: "./logs/wandb"
+    save_dir: ${paths.out_dir}/logs/wandb
     offline: true
     id: null
     anonymous: null
@@ -312,7 +311,7 @@ loggers:
     prefix: ""
     init_kwargs: {}
   csv:
-    save_dir: "./logs/csv"
+    save_dir: ${paths.out_dir}/logs/csv
     name: "cfm-run"
     version: null
     prefix: ""
@@ -342,7 +341,7 @@ callbacks:
     logging_interval: "step"
     log_momentum: false
   model_checkpoint:
-    dirpath: "./checkpoints"
+    dirpath: ${paths.out_dir}/checkpoints
     filename: "{epoch:02d}-{step:06d}"
     monitor: "val/edist"
     verbose: true
@@ -405,7 +404,7 @@ trainer:
 
   profiler: null
 
-  default_root_dir: "./logs"
+  default_root_dir: ${paths.out_dir}/logs
 
   ckpt_path: null
 
@@ -422,4 +421,4 @@ run:
 # Saved-model directory (`Model.save_pretrained`)
 # -----------------------------------------------------------------------------
 save:
-  run_dir: "./runs/cfm_run"
+  run_dir: ${paths.out_dir}/save

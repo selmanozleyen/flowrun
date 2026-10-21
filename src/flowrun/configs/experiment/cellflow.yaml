@@ -1,6 +1,6 @@
 # @package _global_
 # CellFlow: OT-matched conditional flow matching from control to perturbed cells.
-#   flowrun-fit-cfm +experiment=cellflow paths.target_adata=/path/to/data.zarr save.run_dir=runs/cellflow
+#   flowrun-fit-cfm +experiment=cellflow paths.target_adata=/path/to/data.zarr paths.out_dir=runs/<name>
 # Expects obs drug1 / drug2 / cell_line (controls: drug1 == "control") and embeddings in
 # uns["drug"] / uns["cell_line"]. Mirrors sckitflow's docs/configs/cellflow.yaml.
 

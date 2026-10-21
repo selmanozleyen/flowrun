@@ -3,7 +3,7 @@
 # new one. Fused Gromov-Wasserstein matching (a shared linear term on the markers both panels measure, a quadratic
 # term per panel), `resnet1d` conditioning, and a source encoder: the flow generates new-panel cells from noise,
 # conditioned on the encoded old-panel cell.
-#   flowrun-fit-cfm +experiment=flow_cyto_panel_alignment save.run_dir=runs/flow_cyto_panel_alignment
+#   flowrun-fit-cfm +experiment=flow_cyto_panel_alignment paths.out_dir=runs/<name>
 # The inputs are the two panels as prepared by `python -m flowrun.panels` (markers renamed for synonyms, labelled,
 # the steps in `uns["panels"]`). The state is each panel's `layers["logicle_trans"]`, as is; the coupling compares
 # the markers both panels measure (by name) and each panel's own markers. The split is drawn per cell
