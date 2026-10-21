@@ -19,13 +19,13 @@ own SLURM job through submitit:
 | `hydra/launcher/helmholtz.yaml` | The SLURM settings (partition, QoS, GPU, time); swap it for another cluster |
 
 Every trial returns the best value of the metric its checkpoint monitors (`callbacks.model_checkpoint.monitor`,
-`test/edist` for the panel data), and Optuna minimises it. A trial that never logs that metric returns `nan` and
+`val/edist` for the panel data), and Optuna minimises it. A trial that never logs that metric returns `nan` and
 counts as failed; the sweep tolerates up to 20 % failed trials (`hydra.sweeper.max_failure_rate`). The sampler is
 seeded (`hydra.sweeper.sampler.seed: 0`), so a relaunch draws the same cells.
 
-The panel data splits into train / test only, so, as in #202, the test split also drives model selection (early
-stopping, the best checkpoint, and the sweep's choice). Its scores are optimistic: confirm the chosen cell on data
-the sweep never saw before reporting it.
+The prepared panel data splits into train / test only. `splitter.val_from_train: 0.1` moves 10 % of each panel's
+training cells to `val` in memory (the input files keep their split), and `val/edist` drives model selection (early
+stopping, the best checkpoint, and the sweep's choice), so `test` stays unseen until the final evaluation.
 
 ## Environment
 

@@ -214,6 +214,19 @@ def split_labels(obs, splitter: DictConfig, *, seed: int):
     )
 
 
+def val_from_train(adatas: list[ad.AnnData], splitter: DictConfig, *, train: str, seed: int) -> None:
+    """Moves ``splitter.val_from_train`` of each group's ``train`` rows to ``val``, in memory only, so a split
+    reused from files without a validation split gets one and the files keep theirs."""
+    rng = np.random.default_rng(seed)
+    for a in adatas:
+        labels = a.obs[splitter.split_key].astype(str).to_numpy().copy()
+        groups = a.obs[list(splitter.group_keys)].astype(str).agg("|".join, axis=1).to_numpy()
+        for g in np.unique(groups):
+            rows = np.flatnonzero((groups == g) & (labels == train))
+            labels[rng.choice(rows, size=round(len(rows) * splitter.val_from_train), replace=False)] = "val"
+        a.obs[splitter.split_key] = pd.Categorical(labels)
+
+
 @hydra.main(config_path="configs", config_name="fit_cfm", version_base=None)
 def main(config: DictConfig) -> float:
     """Main entrypoint for CFM training."""
@@ -253,6 +266,11 @@ def main(config: DictConfig) -> float:
             a.obs[splitter.split_key] = pd.Categorical(part, categories=labels.cat.categories)
     else:
         logger.info(f"Reusing the split in obs[{splitter.split_key!r}]; set splitter.overwrite=true to re-split.")
+        if splitter.val_from_train and not any((a.obs[splitter.split_key] == "val").any() for a in adatas):
+            logger.info(
+                f"The split has no val: moving {splitter.val_from_train:.0%} of each group's training rows to val."
+            )
+            val_from_train(adatas, splitter, train=config.datamodule.train_split, seed=config.run.splitter_seed)
 
     # Preprocessing is fitted on the training targets and the shared sources, so held-out cells never shape it.
     pp = config.preprocessing
@@ -463,7 +481,9 @@ def main(config: DictConfig) -> float:
 
     # Initialize metrics used to evaluate model's predictions during validation.
     logger.info("Initializing metrics.")
-    edist = EnergyDistance(dist_sync_on_step=config.metrics.edist.dist_sync_on_step)
+    edist = EnergyDistance(
+        dist_sync_on_step=config.metrics.edist.dist_sync_on_step, max_samples=config.metrics.edist.max_samples
+    )
     mmd = MaximumMeanDiscrepancy(
         gammas=config.metrics.mmd.gammas,
         dist_sync_on_step=config.metrics.mmd.dist_sync_on_step,

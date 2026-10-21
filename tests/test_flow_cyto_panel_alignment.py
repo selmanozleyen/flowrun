@@ -12,6 +12,7 @@ import pandas as pd
 import pytest
 import yaml
 from hydra import compose, initialize_config_dir
+from omegaconf import OmegaConf
 
 from flowrun import fit_cfm
 
@@ -63,9 +64,31 @@ def test_panel_smoke_runs(tiny_panel_adata: Path, tmp_path: Path) -> None:
         cfg = compose(config_name="fit_cfm", overrides=overrides)
     assert cfg.coupling.method == "fused" and cfg.module.conditioning_id == "resnet1d"
     score = fit_cfm.main.__wrapped__(cfg)
-    assert math.isfinite(score)  # the monitored test/edist was logged, not a missing metric
+    assert math.isfinite(score)  # the monitored val/edist was logged, not a missing metric
     assert (tmp_path / "run" / "config.json").is_file()
-    assert ad.read_zarr(tiny_panel_adata).obs["split"].value_counts()["test"] == 80  # the prepared split was reused
+    on_disk = ad.read_zarr(tiny_panel_adata).obs["split"].value_counts()
+    assert on_disk["test"] == 80 and "val" not in on_disk  # the prepared split was reused; val stays in memory
+
+
+def test_val_comes_from_train_per_group() -> None:
+    obs = pd.DataFrame(
+        {
+            "dataset": ["a"] * 100 + ["b"] * 50,
+            "split": (["train"] * 80 + ["test"] * 20) + (["train"] * 40 + ["test"] * 10),
+        }
+    )
+    adata = ad.AnnData(obs=obs)
+    splitter = OmegaConf.create({"split_key": "split", "group_keys": ["dataset"], "val_from_train": 0.25})
+    fit_cfm.val_from_train([adata], splitter, train="train", seed=0)
+    counts = adata.obs.groupby(["dataset", "split"], observed=True).size().to_dict()
+    assert counts == {
+        ("a", "test"): 20,
+        ("a", "train"): 60,
+        ("a", "val"): 20,
+        ("b", "test"): 10,
+        ("b", "train"): 30,
+        ("b", "val"): 10,
+    }
 
 
 def test_panel_without_a_prepared_split_fails_and_writes_nothing(tiny_panel_adata: Path, tmp_path: Path) -> None:
@@ -101,7 +124,8 @@ def test_the_panel_contract() -> None:
     assert dict(dm.categorical_reps) == {"panel": "dataset"}
     assert cfg.module.conditioning_id == "resnet1d" and cfg.module.source_encoder_output_dim == 16
     assert cfg.training.generate_from_noise and cfg.inference.generate_from_noise
-    assert cfg.callbacks.model_checkpoint.monitor == cfg.callbacks.early_stopping.monitor == "test/edist"
+    assert cfg.callbacks.model_checkpoint.monitor == cfg.callbacks.early_stopping.monitor == "val/edist"
+    assert cfg.splitter.val_from_train == 0.1
 
 
 FUSED = {
@@ -194,4 +218,4 @@ def test_one_sweep_trial_runs_through_optuna(tiny_panel_adata: Path, tmp_path: P
     assert result.returncode == 0, result.stderr[-3000:]
     assert "infer_relative_search_space" not in result.stderr
     results = yaml.safe_load((tmp_path / "sweep" / "optimization_results.yaml").read_text())
-    assert np.isfinite(results["best_value"])  # Optuna got the monitored test/edist, not the inf of a missing val/edist
+    assert np.isfinite(results["best_value"])  # Optuna got the monitored val/edist

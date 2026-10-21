@@ -81,6 +81,7 @@ splitter:
   always_train_keys: ["control"]
   test_fraction: 0.2
   val_fraction: 0.1
+  val_from_train: null            # a reused split without val: move this fraction of each group's train rows to val
   key: null
   test: []
   val: []
@@ -274,6 +275,7 @@ optimizer:
 metrics:
   edist:
     dist_sync_on_step: false
+    max_samples: 4096   # rows scored per batch; validation scores every sample of every cell
   mmd:
     gammas: [1.0, 2.0, 4.0, 8.0, 16.0]
     dist_sync_on_step: false

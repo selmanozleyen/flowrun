@@ -17,6 +17,7 @@ splitter:
   group_keys: [dataset]
   always_train_keys: []
   test_fraction: 0.2
+  val_from_train: 0.1   # the prepared split is train / test only; test stays out of model selection
 
 datamanager:
   target_sample_rep: X_zscore
@@ -79,12 +80,11 @@ metrics:
   mmd:
     gammas: null
 
-# The prepared panel data splits into train / test only, so the test split is what the run is judged on.
 callbacks:
   early_stopping:
-    monitor: test/edist
+    monitor: val/edist
   model_checkpoint:
-    monitor: test/edist
+    monitor: val/edist
 
 trainer:
   accelerator: cuda
