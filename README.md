@@ -39,6 +39,7 @@ pooled with attention, cell line as the group); `cellflow_smoke` is a small vers
   (`splitter.overwrite=true` re-splits).
   `shared_source_combination` holds out condition combinations, `shared_source_holdout` holds out chosen
   values of one column (e.g. cell lines).
-- `flowrun.pca`: `scanpy.pp.pca` on dask, fitted on the training split (reading only those rows' chunks); every cell's projection and the
-  basis are written into the input file (`obsm[sample_rep]`, `varm["PCs"]`, `uns["pca"]`).
+- `flowrun.preprocess`: PCA (`scanpy.pp.pca` on dask), z-score and whitening, fitted on the training split
+  (reading only those rows' chunks). Every cell's output goes to `obsm[sample_rep]` and the fitted steps to
+  `uns["preprocessing"]` in the input file; `apply` repeats them on new cells, `inverse` maps predictions back.
 - `flowrun.fit_cfm`: the training entry point.

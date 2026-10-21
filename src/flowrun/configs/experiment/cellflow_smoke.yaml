@@ -4,8 +4,8 @@
 defaults:
   - cellflow
 
-pca:
-  n_comps: 20
+preprocessing:
+  pca: 20
   n_hvg: null
 
 module:

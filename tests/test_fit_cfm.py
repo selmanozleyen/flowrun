@@ -729,7 +729,7 @@ class TestFitCFMRunsAxes:
         )
 
 
-def test_holdout_split_with_pca_from_zarr(tmp_path: Path, target_adata_path: Path) -> None:
+def test_holdout_split_with_preprocessing_from_zarr(tmp_path: Path, target_adata_path: Path) -> None:
     """Read a zarr input, hold out whole values of one column, and train on a PCA fitted on the training split."""
     zarr_path = tmp_path / "target.zarr"
     ad.read_h5ad(target_adata_path).write_zarr(zarr_path)
@@ -740,12 +740,15 @@ def test_holdout_split_with_pca_from_zarr(tmp_path: Path, target_adata_path: Pat
             "splitter.key=source_split",
             "splitter.test=[source_split0]",
             "splitter.val=[source_split1]",
-            "pca.n_comps=5",
-            "pca.overwrite=true",  # the PCA replaces the schema's existing sample_rep
+            "preprocessing.pca=5",
+            "preprocessing.zscore=true",
+            "preprocessing.whitening=zca",
+            "preprocessing.overwrite=true",  # the PCA replaces the schema's existing sample_rep
         ],
         tmp_path=tmp_path,
         target_adata_path=zarr_path,
     )
     written = ad.read_zarr(zarr_path)  # every cell projected into the schema's sample_rep, basis alongside
     assert written.obsm["X_repr"].shape == (written.n_obs, 5)
-    assert written.varm["PCs"].shape == (written.n_vars, 5) and "mean" in written.uns["pca"]
+    assert written.uns["preprocessing"]["pca"]["PCs"].shape == (written.n_vars, 5)
+    assert list(written.uns["preprocessing"]["steps"]) == ["pca", "zscore", "whitening"]

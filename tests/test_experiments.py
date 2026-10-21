@@ -49,11 +49,11 @@ def test_cellflow_smoke_runs_on_cellflow_shaped_zarr(tmp_path: Path, experiment:
 
     first = run()
     assert (tmp_path / "run" / "config.json").is_file()
-    assert first.obsm["X_pca"].shape == (first.n_obs, 20) and "mean" in first.uns["pca"]
+    assert first.obsm["X_pca"].shape == (first.n_obs, 20) and "pca" in first.uns["preprocessing"]
     assert set(first.obs["split"]) == {"train", "val", "test", "all"}
 
     # A second run on the same file reuses its split, whatever the seed; only the PCA needs an explicit overwrite.
-    second = run("run.splitter_seed=7", "pca.overwrite=true", "run.allow_overwrite=true")
+    second = run("run.splitter_seed=7", "preprocessing.overwrite=true", "run.allow_overwrite=true")
     assert second.obs["split"].equals(first.obs["split"])
 
 
@@ -112,16 +112,18 @@ def test_cellflow_smoke_on_controls_and_perturbed_in_separate_files(tmp_path: Pa
     ctrl, pert = (ad.read_zarr(p) for p in paths)
     assert set(ctrl.obs["split"]) == {"all"} and {"train", "val", "test"} <= set(pert.obs["split"])
     assert ctrl.obsm["X_pca"].shape == (ctrl.n_obs, 20) and pert.obsm["X_pca"].shape == (pert.n_obs, 20)
-    np.testing.assert_array_equal(ctrl.varm["PCs"], pert.varm["PCs"])  # one basis for both files
+    np.testing.assert_array_equal(  # one basis for both files
+        ctrl.uns["preprocessing"]["pca"]["PCs"], pert.uns["preprocessing"]["pca"]["PCs"]
+    )
 
-    run("run.splitter_seed=7", "pca.overwrite=true", "run.allow_overwrite=true")  # the split is reused
+    run("run.splitter_seed=7", "preprocessing.overwrite=true", "run.allow_overwrite=true")  # the split is reused
     assert ad.read_zarr(paths[1]).obs["split"].equals(pert.obs["split"])
 
     no_split = ad.read_zarr(paths[0])  # the controls' file loses its split; the other keeps it
     del no_split.obs["split"]
     no_split.write_zarr(paths[0])
     with pytest.raises(ValueError, match=r"is in some input files but not in \['ctrl.zarr'\]"):
-        run("pca.overwrite=true", "run.allow_overwrite=true")
+        run("preprocessing.overwrite=true", "run.allow_overwrite=true")
 
 
 def test_cellflow_flows_from_the_controls_and_genot_from_noise():

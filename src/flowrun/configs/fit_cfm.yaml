@@ -134,18 +134,24 @@ datamodule:
   loader_kwargs: {}
 
 # -----------------------------------------------------------------------------
-# PCA (`flowrun.pca.pca`)
+# Preprocessing (`flowrun.preprocess`)
 #
-# Fitted on the training targets and the shared sources, then every cell is
-# projected into `obsm[datamanager.sample_rep]`. The projection and the basis
-# (`varm["PCs"]`, `uns["pca"]["mean"]`) are written into the input file.
-# `n_comps: null` skips it and trains on an existing `sample_rep`.
+# In order, each optional: PCA of X, z-score, whitening. Fitted on the training
+# targets and the shared sources, then every cell is transformed into
+# `obsm[datamanager.sample_rep]`. The output and every fitted step
+# (`uns["preprocessing"]`: order, input, parameters) are written into the input
+# file, so `flowrun.preprocess.apply` / `inverse` repeat or undo it. All off:
+# train on an existing `sample_rep`.
 # -----------------------------------------------------------------------------
-pca:
-  n_comps: null
-  n_hvg: null
+preprocessing:
+  pca: null                       # number of components of X
+  n_hvg: null                     # fit the PCA on this many highly variable genes
   hvg_flavor: "seurat"
-  overwrite: false                # replace a PCA already in the input file
+  zscore: false
+  whitening: null                 # zca | pca | cholesky
+  epsilon: 1.0e-8
+  input_key: null                 # without PCA: start from obsm[input_key] (null: X)
+  overwrite: false                # replace a preprocessing already in the input file
 
 # -----------------------------------------------------------------------------
 # Velocity field network (`MLPVelocityConfig`)

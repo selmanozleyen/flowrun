@@ -3,7 +3,7 @@
 # source encoder embeds (cf-train's `objective: genot`).
 #   flowrun-fit-cfm +experiment=[cellflow,genot] paths.target_adata=/path/to/data.zarr
 # Sources and targets in different state spaces (e.g. ATAC controls, RNA targets) also need sckitflow's
-# GENOT-across-spaces support, per-side reps (pca.n_comps=null, each file carrying its own `sample_rep`), and
+# GENOT-across-spaces support, per-side reps (preprocessing.pca=null, each file carrying its own `sample_rep`), and
 # matching on the quadratic terms (`datamanager.use_linear=false` with `source_rep_quad` / `target_rep_quad`).
 
 training:

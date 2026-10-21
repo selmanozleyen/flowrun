@@ -13,8 +13,8 @@ splitter:
   test_fraction: 0.2
   val_fraction: 0.1
 
-pca:
-  n_comps: 50
+preprocessing:
+  pca: 50
   n_hvg: 2000
 
 datamanager:

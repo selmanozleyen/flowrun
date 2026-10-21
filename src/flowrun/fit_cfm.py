@@ -56,7 +56,8 @@ Key concepts
   objects (portable — the run's spec serializes them). See
   ``sckitflow.core._samplers``.
 - **PCA**: optional, fitted on the training split only and written to
-  ``obsm[sample_rep]``. Configured via ``config.pca``; see ``flowrun.pca``.
+  ``obsm[sample_rep]``, with z-score and whitening. Configured via ``config.preprocessing``; see
+  ``flowrun.preprocess``.
 - **Inference**: integrates the learned ODE from t=0 to t=1 with ``torchdiffeq``,
   configured via ``ODEInferenceConfig``.
 
@@ -131,7 +132,7 @@ from sckitflow.trainer import TrainingPlan
 
 from flowrun import split
 from flowrun._store import write_obs_column
-from flowrun.pca import pca, write_pca
+from flowrun.preprocess import preprocess, write_preprocessing
 
 logger = get_logger(__name__)
 
@@ -258,15 +259,27 @@ def main(config: DictConfig) -> float:
     else:
         logger.info(f"Reusing the split in obs[{splitter.split_key!r}]; set splitter.overwrite=true to re-split.")
 
-    # PCA is fitted on the training targets and the shared sources, so held-out cells never shape the space.
-    if config.pca.n_comps is not None:
+    # Preprocessing is fitted on the training targets and the shared sources, so held-out cells never shape it.
+    pp = config.preprocessing
+    preprocessed = pp.pca is not None or pp.zscore or pp.whitening is not None
+    if preprocessed:
+        if pp.pca is None and pp.input_key == config.datamanager.sample_rep:
+            raise ValueError(
+                f"preprocessing.input_key and datamanager.sample_rep are both {pp.input_key!r}: the preprocessing "
+                "would overwrite its own input. Write it to another key (datamanager.sample_rep), which the model "
+                "then reads."
+            )
         train_mask = np.concatenate([a.obs[splitter.split_key].isin(["train", "all"]).to_numpy() for a in adatas])
-        pca(
+        preprocess(
             adatas,
-            config.pca.n_comps,
             train_mask=train_mask,
-            n_hvg=config.pca.n_hvg,
-            hvg_flavor=config.pca.hvg_flavor,
+            pca=pp.pca,
+            n_hvg=pp.n_hvg,
+            hvg_flavor=pp.hvg_flavor,
+            zscore=pp.zscore,
+            whitening=pp.whitening,
+            epsilon=pp.epsilon,
+            input_key=pp.input_key,
             key_added=config.datamanager.sample_rep,
         )
 
@@ -613,11 +626,11 @@ def main(config: DictConfig) -> float:
         for p, a in zip(paths, adatas, strict=True):
             logger.info(f"Writing the split to obs[{splitter.split_key!r}] of {p}.")
             write_obs_column(p, splitter.split_key, a.obs[splitter.split_key].array)
-    if config.pca.n_comps is not None:
+    if preprocessed:
         # Into the input file: every cell's projection, and the basis that maps predictions back to genes.
         for p, a in zip(paths, adatas, strict=True):
-            logger.info(f"Writing the PCA into {p}.")
-            write_pca(p, a, config.datamanager.sample_rep, overwrite=config.pca.overwrite)
+            logger.info(f"Writing the preprocessing into {p}.")
+            write_preprocessing(p, a, config.datamanager.sample_rep, overwrite=pp.overwrite)
 
     # Capture the edist from the latest validation step.
     val_edist_key = f"val/{EDIST_KEY}"
