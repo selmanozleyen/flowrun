@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import os
+import socket
+import time
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
@@ -41,3 +44,37 @@ def write_obs_column(path: str | Path, name: str, values: pd.Categorical | np.nd
         ad.io.write_elem(obs, name, values)
         if name not in order:
             obs.attrs["column-order"] = [*order, name]
+
+
+def read_obs_column(path: str | Path, name: str) -> pd.Categorical | np.ndarray | None:
+    """One ``obs`` column as on disk now (not a consolidated snapshot), or ``None`` if the file has none."""
+    path = Path(path)
+    if path.suffix == ".zarr":
+        obs = zarr.open_group(path, mode="r", use_consolidated=False)["obs"]
+        return ad.io.read_elem(obs[name]) if name in obs else None
+    import h5py
+
+    with h5py.File(path, "r") as root:
+        return ad.io.read_elem(root["obs"][name]) if name in root["obs"] else None
+
+
+@contextmanager
+def exclusive(lock: Path, *, timeout: float = 600) -> Iterator[None]:
+    """Holds ``lock`` while the block runs: created with ``O_EXCL``, which is atomic on network file systems too."""
+    deadline = time.monotonic() + timeout
+    while True:
+        try:
+            fd = os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            break
+        except FileExistsError:
+            if time.monotonic() > deadline:
+                raise TimeoutError(
+                    f"{lock} is still held after {timeout:.0f} s; delete it if no run is using it."
+                ) from None
+            time.sleep(1)
+    try:
+        os.write(fd, f"{socket.gethostname()}:{os.getpid()}".encode())
+        yield
+    finally:
+        os.close(fd)
+        lock.unlink(missing_ok=True)

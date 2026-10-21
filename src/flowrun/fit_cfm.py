@@ -128,7 +128,7 @@ from sckitflow.data import DataManagerConfig, FlowDataModule
 from sckitflow.trainer import TrainingPlan
 
 from flowrun import split
-from flowrun._store import write_obs_column
+from flowrun._store import exclusive, read_obs_column, write_obs_column
 from flowrun.panels import from_state
 from flowrun.preprocess import preprocess, write_preprocessing
 
@@ -266,12 +266,24 @@ def main(config: DictConfig) -> float:
             f"obs[{splitter.split_key!r}] is in some input files but not in {without}, and one split must cover "
             "every file. Set splitter.overwrite=true to split them all again."
         )
-    new_split = bool(without) or splitter.overwrite
-    if new_split:
-        obs = pd.concat([a.obs for a in adatas], ignore_index=True)
-        labels = split_labels(obs, splitter, seed=config.run.splitter_seed)
-        for a, part in zip(adatas, np.split(labels.to_numpy(), np.cumsum([a.n_obs for a in adatas])[:-1]), strict=True):
-            a.obs[splitter.split_key] = pd.Categorical(part, categories=labels.cat.categories)
+    if without or splitter.overwrite:
+        # Written now, under a lock: runs in parallel on the same files (grids, sweeps) write one split; the others
+        # wait and reuse it.
+        key = splitter.split_key
+        with exclusive(paths[0].with_name(f".{paths[0].name}.{key}.lock")):
+            written = [] if splitter.overwrite else [read_obs_column(p, key) for p in paths]
+            if written and all(w is not None for w in written):
+                logger.info(f"Another run wrote obs[{key!r}] meanwhile; reusing it.")
+                for a, w in zip(adatas, written, strict=True):
+                    a.obs[key] = w
+            else:
+                obs = pd.concat([a.obs for a in adatas], ignore_index=True)
+                labels = split_labels(obs, splitter, seed=config.run.splitter_seed)
+                parts = np.split(labels.to_numpy(), np.cumsum([a.n_obs for a in adatas])[:-1])
+                for p, a, part in zip(paths, adatas, parts, strict=True):
+                    a.obs[key] = pd.Categorical(part, categories=labels.cat.categories)
+                    logger.info(f"Writing the split to obs[{key!r}] of {p}.")
+                    write_obs_column(p, key, a.obs[key].array)
     else:
         logger.info(f"Reusing the split in obs[{splitter.split_key!r}]; set splitter.overwrite=true to re-split.")
 
@@ -654,10 +666,6 @@ def main(config: DictConfig) -> float:
         logger.info(f"Saving model {config.save.run_dir}.")
         model.save_pretrained(config.save.run_dir, overwrite=config.run.allow_overwrite)
 
-        if new_split:
-            for p, a in zip(paths, adatas, strict=True):
-                logger.info(f"Writing the split to obs[{splitter.split_key!r}] of {p}.")
-                write_obs_column(p, splitter.split_key, a.obs[splitter.split_key].array)
         if preprocessed:
             # Into the input file: every cell's projection, and the basis that maps predictions back to genes.
             for p, a in zip(paths, adatas, strict=True):

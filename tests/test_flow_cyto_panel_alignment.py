@@ -279,3 +279,30 @@ def test_one_sweep_trial_runs_through_optuna(tiny_panels: list[Path], tmp_path: 
     assert "infer_relative_search_space" not in result.stderr
     results = yaml.safe_load((tmp_path / "sweep" / "optimization_results.yaml").read_text())
     assert np.isfinite(results["best_value"])  # Optuna got the monitored val/edist
+
+
+@pytest.mark.slow
+def test_a_grid_runs_as_parallel_local_processes(tiny_panels: list[Path], tmp_path: Path) -> None:
+    """Hydra's joblib launcher: one process per grid point, each with its own output directory."""
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "flowrun.fit_cfm",
+            "-m",
+            "+experiment=flow_cyto_panel_alignment_smoke",
+            "hydra/launcher=joblib",
+            "hydra.launcher.n_jobs=2",
+            f"hydra.sweep.dir={tmp_path / 'grid'}",
+            "paths.out_dir=${hydra:runtime.output_dir}",
+            f"paths.target_adata=[{tiny_panels[0]},{tiny_panels[1]}]",
+            "coupling.epsilon=0.5,1.0",
+        ],
+        check=False,
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        timeout=600,
+    )
+    assert result.returncode == 0, result.stderr[-3000:]
+    assert sorted(p.parent.parent.name for p in (tmp_path / "grid").glob("*/save/config.json")) == ["0", "1"]
