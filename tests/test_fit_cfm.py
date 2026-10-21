@@ -167,7 +167,6 @@ def _dm_shared(**overrides_kwargs) -> dict:
         "source_rep_quad": None,
         "target_rep_quad": None,
         "use_linear": True,
-        "target_categorical_covs_dict": {},
         "target_continuous_covs": [],
     }
     base.update(overrides_kwargs)
@@ -277,7 +276,7 @@ _SCHEMA_PAIRS: dict[str, tuple[list[str], list[str]]] = {
     "groups_only": (
         overrides(
             "datamanager",
-            sample_rep="X_repr",
+            target_sample_rep="X_repr",
             **_dm_shared(
                 groups=["source_split"],
                 groups_encoding={"source_split": SOURCE_SPLIT_LABELS},
@@ -290,7 +289,7 @@ _SCHEMA_PAIRS: dict[str, tuple[list[str], list[str]]] = {
     "one_cont_unpaired": (
         overrides(
             "datamanager",
-            sample_rep="X_repr",
+            target_sample_rep="X_repr",
             **_dm_shared(
                 continuous_conditions=["X_tgt"],
                 groups=["source_split"],
@@ -303,7 +302,7 @@ _SCHEMA_PAIRS: dict[str, tuple[list[str], list[str]]] = {
     "one_cat_unpaired": (
         overrides(
             "datamanager",
-            sample_rep="X_repr",
+            target_sample_rep="X_repr",
             **_dm_shared(
                 categorical_conditions={"drug": ["drugA"]},
                 categorical_reps={"drug": "drug"},
@@ -315,7 +314,7 @@ _SCHEMA_PAIRS: dict[str, tuple[list[str], list[str]]] = {
     "one_cat_paired": (
         overrides(
             "datamanager",
-            sample_rep="X_repr",
+            target_sample_rep="X_repr",
             **_dm_shared(
                 categorical_conditions={"drug": ["drugA"]},
                 categorical_reps={"drug": "drug"},
@@ -327,7 +326,7 @@ _SCHEMA_PAIRS: dict[str, tuple[list[str], list[str]]] = {
     "one_cat_paired_with_groups": (
         overrides(
             "datamanager",
-            sample_rep="X_repr",
+            target_sample_rep="X_repr",
             **_dm_shared(
                 categorical_conditions={"drug": ["drugA"]},
                 categorical_reps={"drug": "drug"},
@@ -343,7 +342,7 @@ _SCHEMA_PAIRS: dict[str, tuple[list[str], list[str]]] = {
     "two_cat_unpaired": (
         overrides(
             "datamanager",
-            sample_rep="X_repr",
+            target_sample_rep="X_repr",
             **_dm_shared(
                 categorical_conditions={"drug": ["drugA"], "ko": ["koA"]},
                 categorical_reps={"drug": "drug", "ko": "ko"},
@@ -354,7 +353,7 @@ _SCHEMA_PAIRS: dict[str, tuple[list[str], list[str]]] = {
     "two_cat_paired": (
         overrides(
             "datamanager",
-            sample_rep="X_repr",
+            target_sample_rep="X_repr",
             **_dm_shared(
                 categorical_conditions={"drug": ["drugA"], "ko": ["koA"]},
                 categorical_reps={"drug": "drug", "ko": "ko"},
@@ -366,7 +365,7 @@ _SCHEMA_PAIRS: dict[str, tuple[list[str], list[str]]] = {
     "two_cat_paired_with_groups": (
         overrides(
             "datamanager",
-            sample_rep="X_repr",
+            target_sample_rep="X_repr",
             **_dm_shared(
                 categorical_conditions={"drug": ["drugA"], "ko": ["koA"]},
                 categorical_reps={"drug": "drug", "ko": "ko"},
@@ -381,7 +380,7 @@ _SCHEMA_PAIRS: dict[str, tuple[list[str], list[str]]] = {
     "one_cat_one_cont_paired": (
         overrides(
             "datamanager",
-            sample_rep="X_repr",
+            target_sample_rep="X_repr",
             **_dm_shared(
                 categorical_conditions={"drug": ["drugA"]},
                 categorical_reps={"drug": "drug"},
@@ -394,7 +393,7 @@ _SCHEMA_PAIRS: dict[str, tuple[list[str], list[str]]] = {
     "two_cat_one_cont_paired": (
         overrides(
             "datamanager",
-            sample_rep="X_repr",
+            target_sample_rep="X_repr",
             **_dm_shared(
                 categorical_conditions={"drug": ["drugA"], "ko": ["koA"]},
                 categorical_reps={"drug": "drug", "ko": "ko"},
@@ -408,7 +407,7 @@ _SCHEMA_PAIRS: dict[str, tuple[list[str], list[str]]] = {
     "sample_rep_x_src": (
         overrides(
             "datamanager",
-            sample_rep="X_src",
+            target_sample_rep="X_src",
             **_dm_shared(
                 categorical_conditions={"drug": ["drugA"]},
                 categorical_reps={"drug": "drug"},
@@ -745,12 +744,12 @@ def test_holdout_split_with_preprocessing_from_zarr(tmp_path: Path, target_adata
             "preprocessing.pca=5",
             "preprocessing.zscore=true",
             "preprocessing.whitening=zca",
-            "preprocessing.overwrite=true",  # the PCA replaces the schema's existing sample_rep
+            "preprocessing.overwrite=true",  # the PCA replaces the schema's existing target_sample_rep
         ],
         tmp_path=tmp_path,
         target_adata_path=zarr_path,
     )
-    written = ad.read_zarr(zarr_path)  # every cell projected into the schema's sample_rep, basis alongside
+    written = ad.read_zarr(zarr_path)  # every cell projected into the schema's target_sample_rep, basis alongside
     assert written.obsm["X_repr"].shape == (written.n_obs, 5)
     assert written.uns["preprocessing"]["pca"]["PCs"].shape == (written.n_vars, 5)
     assert list(written.uns["preprocessing"]["steps"]) == ["pca", "zscore", "whitening"]

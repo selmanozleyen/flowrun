@@ -798,7 +798,7 @@ dependencies = [
     { name = "omegaconf" },
     { name = "scanpy" },
     { name = "scikit-learn" },
-    { name = "sckitflow", extra = ["torch"] },
+    { name = "sckitflow" },
     { name = "wandb" },
     { name = "zarr" },
     { name = "zarrs" },
@@ -3335,27 +3335,22 @@ wheels = [
 
 [[package]]
 name = "sckitflow"
-version = "0.1.dev927+gb4b24715f"
-source = { git = "https://github.com/theislab/sckitflow?branch=main#b4b24715f97eda4dcf5224deb8280bc95e7ee95c" }
+version = "0.1.dev972+g3928630c7"
+source = { git = "https://github.com/theislab/sckitflow?branch=main#3928630c711c90232478f7459ef800f091795c65" }
 dependencies = [
     { name = "anndata" },
-    { name = "cloudpickle" },
+    { name = "lightning" },
     { name = "numpy" },
     { name = "pandas" },
+    { name = "pot" },
     { name = "scfit" },
     { name = "scikit-learn" },
     { name = "scipy" },
-    { name = "tqdm" },
-]
-
-[package.optional-dependencies]
-torch = [
-    { name = "lightning" },
-    { name = "pot" },
     { name = "torch" },
     { name = "torchdiffeq" },
     { name = "torchmetrics" },
     { name = "torchsde" },
+    { name = "tqdm" },
 ]
 
 [[package]]

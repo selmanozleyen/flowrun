@@ -88,7 +88,8 @@ splitter:
 # -----------------------------------------------------------------------------
 # DataManager (`DataManagerConfig`)
 #
-#   sample_rep             .obsm key used as the sample representation (e.g. "X_pca")
+#   target_sample_rep      .obsm key of the targets' state, the space the flow lives in (e.g. "X_pca")
+#   source_sample_rep      .obsm key of the sources' own state, if they have one (needs a source encoder)
 #   conditions             obs columns defining the conditional variables
 #   conditions_reps        per-condition representation overrides
 #   conditions_covariates  per-condition extra covariate columns
@@ -96,8 +97,6 @@ splitter:
 #   matched_pairs          fixed [[source group, target group], ...] pairs, or null to match by control_values_dict
 #   split_by               obs column for group-aware splits — must match
 #                          `splitter.split_key`
-#   condition_state_key    obs column naming the cell-state condition
-#   target_categorical_covs_dict  categorical covariates on the target side
 #   target_continuous_covs        continuous covariates on the target side
 #   groups / groups_reps          extra grouping metadata
 #   groups_encoding               {group: encoder spec}, e.g. {type: group_encoder.one_hot, categories: [...]}
@@ -105,15 +104,14 @@ splitter:
 #                                 linear-vs-quadratic representation flags
 # -----------------------------------------------------------------------------
 datamanager:
-  sample_rep: "X_pca"
+  target_sample_rep: "X_pca"
+  source_sample_rep: null        # the sources' own state rep, e.g. ATAC controls flowing into RNA targets
   categorical_conditions: {}
   categorical_reps: {}
   continuous_conditions: []
   control_values_dict: {}
   matched_pairs: null
   split_by: "${splitter.split_key}"
-  condition_state_key: null
-  target_categorical_covs_dict: {}
   target_continuous_covs: []
   groups: []
   groups_reps: {}
@@ -138,10 +136,10 @@ datamodule:
 #
 # In order, each optional: PCA of X, z-score, whitening. Fitted on the training
 # targets and the shared sources, then every cell is transformed into
-# `obsm[datamanager.sample_rep]`. The output and every fitted step
+# `obsm[datamanager.target_sample_rep]`. The output and every fitted step
 # (`uns["preprocessing"]`: order, input, parameters) are written into the input
 # file, so `flowrun.preprocess.apply` / `inverse` repeat or undo it. All off:
-# train on an existing `sample_rep`.
+# train on an existing `target_sample_rep`.
 # -----------------------------------------------------------------------------
 preprocessing:
   pca: null                       # number of components of X
