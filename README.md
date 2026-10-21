@@ -32,6 +32,12 @@ pooled with attention, cell line as the group); `cellflow_smoke` is a small vers
 `genot` layers GENOT on top (generate from noise, conditioned on the encoded source cell):
 `+experiment=[cellflow,genot]`.
 
+## Panel imputation and sweeps
+
+`+experiment=panel` maps cells from an old marker panel onto a new one (fused Gromov-Wasserstein, a source
+encoder); `+experiment=panel_sweep` sweeps it with Optuna on SLURM (`uv sync --extra sweep`, then
+`flowrun-fit-cfm -m +experiment=panel_sweep`). The runbook is `docs/sweeps.md`.
+
 ## Layout
 
 - `flowrun.split`: `train` / `val` / `test` labels for targets in an obs column, and `all` for the sources every

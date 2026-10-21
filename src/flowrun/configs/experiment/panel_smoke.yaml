@@ -1,0 +1,37 @@
+# @package _global_
+# The panel experiment at toy size, for checking the wiring in seconds on CPU:
+#   flowrun-fit-cfm +experiment=panel_smoke paths.target_adata=/path/to/adata_concat.h5ad save.run_dir=runs/smoke
+defaults:
+  - panel
+
+module:
+  num_time_features: 16
+  state_encoder_output_dim: 4
+  time_encoder_output_dim: 4
+  state_encoder_mlp_kwargs: {hidden_dims: [8], activation_cls: silu}
+  time_encoder_mlp_kwargs: {hidden_dims: [8], activation_cls: silu}
+  vf_decoder_mlp_kwargs: {hidden_dims: [8, 8], activation_cls: silu}
+  condition_encoder_output_dim: 8
+  condition_encoder_pooling_proj_dim: 8
+  condition_encoder_output_layers_kwargs: {hidden_dims: [8], activation_cls: silu}
+  source_encoder_mlp_kwargs: {hidden_dims: [8], activation_cls: silu}
+  source_encoder_output_dim: 4
+
+coupling:
+  scale_cost: mean
+  epsilon: 0.1
+  max_iter: 20
+  tol: 1.0e-3
+
+datamodule:
+  n_train_steps: 5
+  batch_size: 16
+
+inference:
+  n_steps: 3
+  n_samples: 8
+
+trainer:
+  accelerator: cpu
+  fast_dev_run: true
+  enable_progress_bar: false

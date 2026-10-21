@@ -1,0 +1,99 @@
+# @package _global_
+# Panel imputation (ported from theislab/sckitflow#202): map cells measured on an old marker panel onto a new
+# one. Fused Gromov-Wasserstein matching (a shared linear term on the markers both panels measure, a quadratic
+# term per panel), `resnet1d` conditioning, and a source encoder: the flow generates from noise conditioned on
+# the encoded old-panel cell.
+#   flowrun-fit-cfm +experiment=panel paths.target_adata=/path/to/adata_concat.h5ad save.run_dir=runs/panel
+# Expects obs `dataset` ("old panel" / "new panel"), and obsm `X_zscore` (the state), `X_lin` (shared markers),
+# `X_quad_src` / `X_quad_tgt` (each panel's own markers); `uns["dataset"]` embeds the panels. A `split` column
+# already in the file (e.g. an 80/20 per-cell split written when preparing the data) is reused.
+
+splitter:
+  type: shared_source_combination
+  source_key: dataset
+  source_value: old panel
+  group_keys: [dataset]
+  always_train_keys: []
+  test_fraction: 0.2
+
+datamanager:
+  sample_rep: X_zscore
+  categorical_conditions:
+    panel: [dataset]
+  categorical_reps:
+    panel: dataset
+  control_values_dict:
+    panel: old panel
+  rep_lin: X_lin
+  source_rep_quad: X_quad_src
+  target_rep_quad: X_quad_tgt
+  use_linear: true
+
+datamodule:
+  n_train_steps: 100
+  batch_size: 256
+
+module:
+  time_features_id: ott-jax
+  num_time_features: 256
+  state_encoder_output_dim: 16
+  time_encoder_output_dim: 16
+  state_encoder_mlp_kwargs: {hidden_dims: [32], activation_cls: silu}
+  time_encoder_mlp_kwargs: {hidden_dims: [32], activation_cls: silu}
+  vf_decoder_mlp_kwargs: {hidden_dims: [64, 64], activation_cls: silu}
+  conditioning_id: resnet1d
+  condition_encoder_output_dim: 32
+  condition_encoder_pooling_mode: mean
+  condition_encoder_pooling_proj_dim: 32
+  condition_encoder_output_layers_kwargs: {hidden_dims: [32], activation_cls: silu}
+  source_encoder_mlp_kwargs: {hidden_dims: [32], activation_cls: silu}   # fused GW: the flow reads the source
+  source_encoder_output_dim: 16
+
+training:
+  generate_from_noise: true
+
+probability_path:
+  name: linear_dirac
+
+coupling:
+  method: fused
+  scale_cost: median
+  epsilon: 1.0
+  max_iter: 1000
+  tol: 1.0e-9
+  alpha: 0.5
+
+inference:
+  generate_from_noise: true
+  solver_kwargs: {method: euler}
+  n_steps: 10
+  n_samples: 100
+
+optimizer:
+  name: AdamW
+  kwargs: {lr: 1.0e-4}
+
+metrics:
+  mmd:
+    gammas: null
+
+# The prepared panel data splits into train / test only, so the test split is what the run is judged on.
+callbacks:
+  early_stopping:
+    monitor: test/edist
+  model_checkpoint:
+    monitor: test/edist
+
+trainer:
+  accelerator: cuda
+
+run:
+  method_seed: 0
+  allow_overwrite: true
+
+loggers:
+  wandb:
+    project: sckitflow
+    name: cfm-panel
+  csv:
+    name: cfm-panel

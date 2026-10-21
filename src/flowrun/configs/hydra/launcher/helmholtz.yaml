@@ -1,0 +1,14 @@
+# @package hydra.launcher
+# One SLURM job per trial on the Helmholtz GPU partition (submitit). Pick another launcher for another cluster:
+#   flowrun-fit-cfm -m +experiment=panel_sweep hydra/launcher=<yours>
+defaults:
+  - submitit_slurm
+
+partition: gpu_p
+qos: gpu_normal
+cpus_per_task: 6
+mem_gb: 64
+gres: gpu:1
+constraint: h100_80gb|a100_80gb
+timeout_min: 720
+array_parallelism: 10

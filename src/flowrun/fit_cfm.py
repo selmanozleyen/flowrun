@@ -632,11 +632,10 @@ def main(config: DictConfig) -> float:
             logger.info(f"Writing the preprocessing into {p}.")
             write_preprocessing(p, a, config.datamanager.sample_rep, overwrite=pp.overwrite)
 
-    # Capture the edist from the latest validation step.
-    val_edist_key = f"val/{EDIST_KEY}"
-    last_val_edist = trainer.callback_metrics.get(val_edist_key, float("inf"))
-    returned_metric = float(last_val_edist)
-    logger.info(f"Finishing the run with edist of {returned_metric:.4f}")
+    # Return the metric the checkpoint watches (e.g. "val/edist"), so a sweep optimizes what the callbacks select on.
+    monitored = config.callbacks.model_checkpoint.monitor
+    returned_metric = float(trainer.callback_metrics.get(monitored, float("inf")))
+    logger.info(f"Finishing the run with {monitored} of {returned_metric:.4f}")
     return returned_metric
 
 

@@ -22,7 +22,12 @@ dependencies = [
   "zarr>=3",
   "zarrs",
 ]
+optional-dependencies.sweep = [
+  "hydra-optuna-sweeper",
+  "hydra-submitit-launcher",
+]
 optional-dependencies.test = [
+  "flowrun[sweep]", # the sweep configs are composed in the tests
   "pytest",
   "pytest-xdist>=3",
 ]
