@@ -90,7 +90,7 @@ def test_the_panel_contract() -> None:
     c = cfg.coupling
     assert (c.method, c.epsilon, c.alpha, c.scale_cost, c.max_iter, c.tol) == ("fused", 1.0, 0.5, "median", 1000, 1e-9)
     dm = cfg.datamanager
-    assert (dm.sample_rep, dm.rep_lin, dm.source_rep_quad, dm.target_rep_quad, dm.use_linear) == (
+    assert (dm.target_sample_rep, dm.rep_lin, dm.source_rep_quad, dm.target_rep_quad, dm.use_linear) == (
         "X_zscore",
         "X_lin",
         "X_quad_src",

@@ -174,8 +174,6 @@ def read_zarr_input(path: Path, config: DictConfig) -> ad.AnnData:
     cols = {
         *dm.groups,
         *(c for level in dm.categorical_conditions.values() for c in level),
-        *dm.target_categorical_covs_dict,
-        dm.condition_state_key,
         dm.split_by,
         splitter.source_key,
         splitter.key,

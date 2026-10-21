@@ -97,8 +97,6 @@ splitter:
 #   matched_pairs          fixed [[source group, target group], ...] pairs, or null to match by control_values_dict
 #   split_by               obs column for group-aware splits — must match
 #                          `splitter.split_key`
-#   condition_state_key    obs column naming the cell-state condition
-#   target_categorical_covs_dict  categorical covariates on the target side
 #   target_continuous_covs        continuous covariates on the target side
 #   groups / groups_reps          extra grouping metadata
 #   groups_encoding               {group: encoder spec}, e.g. {type: group_encoder.one_hot, categories: [...]}
@@ -114,8 +112,6 @@ datamanager:
   control_values_dict: {}
   matched_pairs: null
   split_by: "${splitter.split_key}"
-  condition_state_key: null
-  target_categorical_covs_dict: {}
   target_continuous_covs: []
   groups: []
   groups_reps: {}

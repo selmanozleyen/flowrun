@@ -19,7 +19,7 @@ splitter:
   test_fraction: 0.2
 
 datamanager:
-  sample_rep: X_zscore
+  target_sample_rep: X_zscore
   categorical_conditions:
     panel: [dataset]
   categorical_reps:

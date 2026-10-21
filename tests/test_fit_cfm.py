@@ -167,7 +167,6 @@ def _dm_shared(**overrides_kwargs) -> dict:
         "source_rep_quad": None,
         "target_rep_quad": None,
         "use_linear": True,
-        "target_categorical_covs_dict": {},
         "target_continuous_covs": [],
     }
     base.update(overrides_kwargs)
