@@ -16,7 +16,7 @@ own SLURM job through submitit:
 | `experiment/flow_cyto_panel_alignment_sweep_fused.yaml` | The fused GW sweep |
 | `experiment/flow_cyto_panel_alignment_sweep_linear.yaml` | The linear OT sweep |
 | `experiment/flow_cyto_panel_alignment_sweep_smoke.yaml` | One trial of the fused sweep, to check the Optuna + submitit wiring before a real launch |
-| `hydra/launcher/helmholtz.yaml` | The SLURM settings (partition, QoS, GPU, time); swap it for another cluster |
+| a project's `hydra/launcher/<site>.yaml` | The SLURM settings (partition, QoS, GPU, time), e.g. `helmholtz` in theislab/flow-cytometry-imputation |
 
 Every trial returns the best value of the metric its checkpoint monitors (`callbacks.model_checkpoint.monitor`,
 `val/edist` for the panel data), and Optuna minimises it. A trial that never logs that metric raises and
@@ -48,21 +48,12 @@ uv run python -c "import hydra, optuna, hydra_plugins.hydra_optuna_sweeper; prin
 `hydra-core` must be a stable 1.3.x: 1.4 pre-releases break `hydra-optuna-sweeper` at composition
 (`Key '_recursive_' not in 'OptunaSweeperConf'`). The lock pins a 1.3 release.
 
-## 1. Prepare the two panels
+## 1. Prepare the panels
 
-Once, from the original panels: rename the synonyms, label the panels, and write one zarr each (the steps are kept
-in `uns["panels"]`, the original names in `var["original_name"]`). The values stay as they are; `fit_cfm` reads
-`layers["logicle_trans"]` and takes the shared and own markers by name (`panels.layer`, see `flowrun.panels`).
-
-```bash
-D=/lustre/groups/ml01/workspace/lorenzo.consoli/projects/CITEseq_Imputation_Cambridge/data/CITEseq-imputation
-uv run python -m flowrun.panels --out /lustre/groups/ml01/datasets/$USER/citeseq_panel/prepared \
-  --rename CD41a=CD41 EPCR=CD201 \
-  --panel "old panel" $D/OH_OH0013_OLD_UMAP_annotated_red.h5ad \
-  --panel "new panel" $D/260331_OH013_New_Panel_annotated_red.h5ad
-```
-
-That gives 16 shared markers, 7 old-only and 12 new-only. The experiment configs read the outputs from there.
+Once per dataset, a project renames synonyms, labels each file as a panel (`obs` and its one-hot `uns` table) and
+writes one zarr per panel, then sets `paths.target_adata` to them; for the CITE-seq panels that is
+`python -m flow_cytometry_imputation.prepare` and the `citeseq*` experiments in theislab/flow-cytometry-imputation.
+`fit_cfm` reads `panels.layer` and takes the shared and own markers by name (`flowrun.panels.panel_reps`).
 
 ## 2. Smoke test
 
@@ -95,12 +86,12 @@ cat <sweep dir>/optimization_results.yaml                                       
 
 The same one-trial run, with Hydra's local launcher standing in for SLURM, is `tests/test_flow_cyto_panel_alignment.py` (marked
 `slow`; `pytest -m "not slow"` skips it). With `hydra/launcher=basic` every trial runs in the driver's process, so
-they all log to one W&B run; use the SLURM launcher for one run per trial.
+each trial still gets its own W&B run (`fit_cfm` finishes its run).
 
 ## 3. The real sweep
 
 Run the Hydra driver as one small SLURM job, so it survives a disconnect; it submits the 30 trials as GPU jobs
-through the `helmholtz` launcher and finishes when they do.
+through the project's SLURM launcher and finishes when they do.
 
 ```bash
 sbatch --job-name=cfm-sweep --partition=cpu_p --qos=cpu_normal --cpus-per-task=2 --mem=8G --time=48:00:00 \
@@ -121,7 +112,7 @@ tail -f <sweep dir>/<trial>/logs/csv/*/*/metrics.csv   # <name>/version_<n>/metr
 
 If trials run one at a time, SLURM is throttling them, not Hydra: `1 RUNNING, N PENDING` is usually the QoS
 `MaxJobsPU` cap (`sacctmgr show qos <qos> format=Name,MaxJobsPU`); switch the QoS in
-`hydra/launcher/helmholtz.yaml` or ask for a higher cap. All `PENDING` with `ReqNodeNotAvail`: the `constraint`
+the project's launcher config or ask for a higher cap. All `PENDING` with `ReqNodeNotAvail`: the `constraint`
 there cannot be met; remove it.
 
 ## 5. Collect results
@@ -149,7 +140,7 @@ concentrates trials around good regions.
 | `Key '_recursive_' not in 'OptunaSweeperConf'` at composition | `hydra-core` is a 1.4 pre-release; use the locked 1.3 (`uv sync --extra sweep`) |
 | `Key 'infer_relative_search_space' not in 'SamplerConfig'` | The sampler reached Optuna uninstantiated: select it with `override /hydra/sweeper/sampler: random` only, never with a manual `sampler:` block |
 | `Could not find 'hydra/sweeper/optuna'` | The `sweep` extra is missing: `uv sync --extra sweep` |
-| `Key 'partition' not in 'BasicLauncherConf'` | The SLURM settings belong to the `helmholtz` launcher; another launcher needs its own config |
+| `Key 'partition' not in 'BasicLauncherConf'` | SLURM settings need a SLURM launcher: select the project's (`hydra/launcher=<site>`) |
 | `Hydra15MigrationWarning` about `version_base` | Harmless on hydra-core 1.3 |
 | `File exists: .../save` on a retried trial | A preempted trial left a partial directory: remove it, or set `run.allow_overwrite=true` |
 | `Sinkhorn did not converge` | Harmless unless the metric plateaus; try a larger `coupling.epsilon` |

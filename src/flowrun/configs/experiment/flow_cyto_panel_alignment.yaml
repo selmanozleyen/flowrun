@@ -10,9 +10,7 @@
 # (target panel only; the old panel is every split's source) and written once per seed to obs["split_<seed>"].
 
 paths:
-  target_adata:
-    - /lustre/groups/ml01/datasets/selman.ozleyen/citeseq_panel/prepared/OH_OH0013_OLD_UMAP_annotated_red.zarr
-    - /lustre/groups/ml01/datasets/selman.ozleyen/citeseq_panel/prepared/260331_OH013_New_Panel_annotated_red.zarr
+  target_adata: ???   # [old panel zarr, new panel zarr]: a project supplies them (e.g. theislab/flow-cytometry-imputation)
 
 panels:
   layer: logicle_trans

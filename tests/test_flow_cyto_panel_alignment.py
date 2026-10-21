@@ -20,19 +20,21 @@ CONFIGS = str(Path(fit_cfm.__file__).parent / "configs")
 
 @pytest.fixture
 def tiny_panels(tmp_path: Path) -> list[Path]:
-    """Two original panels (h5ad) with a synonym pair, prepared to zarr by the `flowrun.panels` script."""
+    """Two prepared panels: named markers (6 shared after renaming), a label and its one-hot table, `logicle_trans`."""
     rng = np.random.default_rng(0)
     shared = [f"shared_{i}" for i in range(6)]
-    var = {"old": [*shared, "EPCR", "old_0", "old_1"], "new": [*shared, "CD201", "new_0", "new_1", "new_2"]}
-    args = ["--out", str(tmp_path / "prepared"), "--rename", "EPCR=CD201"]
+    var = {"old": [*shared, "CD201", "old_0", "old_1"], "new": [*shared, "CD201", "new_0", "new_1", "new_2"]}
+    onehot = {"new panel": np.array([1.0, 0.0]), "old panel": np.array([0.0, 1.0])}
+    paths = []
     for name, label in [("old", "old panel"), ("new", "new panel")]:
         logicle = rng.normal(size=(200, len(var[name]))).astype(np.float32)
-        a = ad.AnnData(X=logicle * 2, var=pd.DataFrame(index=var[name]), layers={"logicle_trans": logicle})
-        a.obs_names = [f"{name}_{i}" for i in range(a.n_obs)]
-        a.write_h5ad(tmp_path / f"{name}.h5ad")
-        args += ["--panel", label, str(tmp_path / f"{name}.h5ad")]
-    panels.main(args)
-    return [tmp_path / "prepared" / "old.zarr", tmp_path / "prepared" / "new.zarr"]
+        obs = pd.DataFrame({"dataset": pd.Categorical([label] * 200, categories=sorted(onehot))})
+        obs.index = [f"{name}_{i}" for i in range(200)]
+        a = ad.AnnData(X=logicle * 2, obs=obs, var=pd.DataFrame(index=var[name]), layers={"logicle_trans": logicle})
+        a.uns["dataset"] = onehot
+        paths.append(tmp_path / "prepared" / f"{name}.zarr")
+        a.write_zarr(paths[-1])
+    return paths
 
 
 def test_two_runs_in_one_process_get_their_own_wandb_runs(tiny_panels: list[Path], tmp_path: Path) -> None:
@@ -52,16 +54,6 @@ def test_two_runs_in_one_process_get_their_own_wandb_runs(tiny_panels: list[Path
             fit_cfm.main.__wrapped__(compose(config_name="fit_cfm", overrides=overrides))
     for name in ("a", "b"):
         assert len(list((tmp_path / name / "wandb").rglob("config_resolved.yaml"))) == 1
-
-
-def test_prepare_panels_renames_labels_and_records(tiny_panels: list[Path]) -> None:
-    old, new = (ad.read_zarr(p) for p in tiny_panels)
-    assert "CD201" in old.var_names and "EPCR" not in old.var_names
-    assert old.var.loc["CD201", "original_name"] == "EPCR"
-    assert set(old.obs["dataset"]) == {"old panel"} and set(new.obs["dataset"]) == {"new panel"}
-    np.testing.assert_array_equal(new.uns["dataset"]["new panel"], [1, 0])  # sorted labels, as in #202
-    assert dict(old.uns["panels"]["rename"]) == {"EPCR": "CD201"}
-    assert not set(old.obsm) & {"X_state", "X_lin", "X_quad"}  # the reps follow from the names at load time
 
 
 def test_panel_reps_by_marker_name(tiny_panels: list[Path]) -> None:
@@ -184,7 +176,7 @@ def test_the_sweep_composes(experiment: str, axes: dict, monkeypatch: pytest.Mon
         cfg = compose(config_name="fit_cfm", overrides=[f"+experiment={experiment}"], return_hydra_config=True)
     sweeper, launcher = cfg.hydra.sweeper, cfg.hydra.launcher
     assert sweeper._target_ == "hydra_plugins.hydra_optuna_sweeper.optuna_sweeper.OptunaSweeper"
-    assert launcher._target_ == "hydra_plugins.hydra_submitit_launcher.submitit_launcher.SlurmLauncher"
+    assert launcher._target_ == "hydra._internal.core_plugins.basic_launcher.BasicLauncher"  # a project picks its own
     assert sweeper.sampler._target_ == "optuna.samplers.RandomSampler"
     assert sweeper.sampler.seed == 0
     assert sweeper.direction == "minimize" and sweeper.max_failure_rate == 0.2
@@ -193,12 +185,6 @@ def test_the_sweep_composes(experiment: str, axes: dict, monkeypatch: pytest.Mon
         "run.splitter_seed": "choice(42, 43, 44, 45, 46)",
         **axes,
     }
-    assert (launcher.partition, launcher.qos, launcher.gres, launcher.timeout_min) == (
-        "gpu_p",
-        "gpu_normal",
-        "gpu:1",
-        720,
-    )
     assert cfg.coupling.method == ("sinkhorn" if experiment.endswith("linear") else "fused")
     if experiment.endswith("linear"):  # matched on the shared markers only
         assert cfg.datamanager.source_rep_quad is None and cfg.datamanager.target_rep_quad is None
@@ -219,7 +205,7 @@ def test_console_script_finds_its_configs(tmp_path: Path) -> None:
         timeout=300,
     )
     assert result.returncode == 0, result.stderr[-3000:]
-    assert "method: fused" in result.stdout and "SlurmLauncher" in result.stdout
+    assert "method: fused" in result.stdout and "OptunaSweeper" in result.stdout
 
 
 @pytest.mark.slow

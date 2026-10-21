@@ -1,14 +1,13 @@
 # @package _global_
 # Shared settings of the flow_cyto_panel_alignment sweeps (ported from theislab/sckitflow#202): Optuna random draws over the split
-# seed, one SLURM job per trial via submitit. Run one of flow_cyto_panel_alignment_sweep_fused / flow_cyto_panel_alignment_sweep_linear, which add the
+# seed. The launcher is the caller's (a project's `hydra/launcher`, or `hydra/launcher=...`); without one, trials run locally. Run one of flow_cyto_panel_alignment_sweep_fused / flow_cyto_panel_alignment_sweep_linear, which add the
 # coupling axes. Needs the `sweep` extra (`uv sync --extra sweep`) and stable
 # hydra-core 1.3.x (1.4 pre-releases break the Optuna sweeper at composition). See docs/sweeps.md.
 #   flowrun-fit-cfm -m +experiment=flow_cyto_panel_alignment_sweep_fused
 # The data axis is the split seed (five per-cell splits of the same two panels); trials go to
-# a fresh timestamped directory under FLOWRUN_SWEEP_DIR (default `multirun`). The launcher is the Helmholtz one.
+# a fresh timestamped directory under FLOWRUN_SWEEP_DIR (default `multirun`).
 defaults:
   - flow_cyto_panel_alignment
-  - override /hydra/launcher: helmholtz      # SLURM settings in configs/hydra/launcher/helmholtz.yaml
   - override /hydra/sweeper: optuna
   - override /hydra/sweeper/sampler: random   # do not add a manual `sampler:` block: it fights this override
 
