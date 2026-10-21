@@ -56,6 +56,33 @@ def test_two_runs_in_one_process_get_their_own_wandb_runs(tiny_panels: list[Path
         assert len(list((tmp_path / name / "wandb").rglob("config_resolved.yaml"))) == 1
 
 
+@pytest.fixture
+def prepared_by_script(tmp_path: Path) -> list[Path]:
+    """Two original panels (h5ad) with a synonym pair, prepared to zarr by `python -m flowrun.panels`."""
+    rng = np.random.default_rng(0)
+    shared = [f"shared_{i}" for i in range(6)]
+    var = {"old": [*shared, "EPCR", "old_0", "old_1"], "new": [*shared, "CD201", "new_0", "new_1", "new_2"]}
+    args = ["--out", str(tmp_path / "prepared"), "--rename", "EPCR=CD201"]
+    for name, label in [("old", "old panel"), ("new", "new panel")]:
+        logicle = rng.normal(size=(200, len(var[name]))).astype(np.float32)
+        a = ad.AnnData(X=logicle * 2, var=pd.DataFrame(index=var[name]), layers={"logicle_trans": logicle})
+        a.obs_names = [f"{name}_{i}" for i in range(a.n_obs)]
+        a.write_h5ad(tmp_path / f"{name}.h5ad")
+        args += ["--panel", label, str(tmp_path / f"{name}.h5ad")]
+    panels.main(args)
+    return [tmp_path / "prepared" / "old.zarr", tmp_path / "prepared" / "new.zarr"]
+
+
+def test_prepare_panels_renames_labels_and_records(prepared_by_script: list[Path]) -> None:
+    old, new = (ad.read_zarr(p) for p in prepared_by_script)
+    assert "CD201" in old.var_names and "EPCR" not in old.var_names
+    assert old.var.loc["CD201", "original_name"] == "EPCR"
+    assert set(old.obs["dataset"]) == {"old panel"} and set(new.obs["dataset"]) == {"new panel"}
+    np.testing.assert_array_equal(new.uns["dataset"]["new panel"], [1, 0])  # sorted labels, as in #202
+    assert dict(old.uns["panels"]["rename"]) == {"EPCR": "CD201"}
+    assert not set(old.obsm) & {"X_state", "X_lin", "X_quad"}  # the reps follow from the names at load time
+
+
 def test_panel_reps_by_marker_name(tiny_panels: list[Path]) -> None:
     old, new = (ad.read_zarr(p) for p in tiny_panels)
     reps = panels.panel_reps([old, new], layer="logicle_trans")
