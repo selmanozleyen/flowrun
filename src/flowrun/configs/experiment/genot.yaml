@@ -1,0 +1,18 @@
+# @package _global_
+# GENOT on top of an experiment: generate targets from noise, conditioned on the matched source cell, which a
+# source encoder embeds (cf-train's `objective: genot`).
+#   flowrun-fit-cfm +experiment=[cellflow,genot] paths.target_adata=/path/to/data.zarr
+# Sources and targets in different state spaces (e.g. ATAC controls, RNA targets) also need sckitflow's
+# GENOT-across-spaces support, per-side reps (pca.n_comps=null, each file carrying its own `sample_rep`), and
+# matching on the quadratic terms (`datamanager.use_linear=false` with `source_rep_quad` / `target_rep_quad`).
+
+training:
+  generate_from_noise: true
+
+inference:
+  generate_from_noise: true
+  n_samples: 1                      # one generated target per source cell
+
+module:
+  source_encoder_mlp_kwargs: {hidden_dims: [256]}
+  source_encoder_output_dim: 128

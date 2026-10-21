@@ -10,7 +10,8 @@ from sckitflow.data.sim import get_dummy_adata
 from flowrun import fit_cfm
 
 
-def test_cellflow_smoke_runs_on_cellflow_shaped_zarr(tmp_path: Path):
+@pytest.mark.parametrize("experiment", ["cellflow_smoke", "[cellflow_smoke,genot]"])
+def test_cellflow_smoke_runs_on_cellflow_shaped_zarr(tmp_path: Path, experiment: str):
     """The CellFlow experiment on its expected data layout: sparse X in zarr, drug1 / drug2 / cell_line."""
     adata = get_dummy_adata(
         n_obs_pert=400,
@@ -27,7 +28,7 @@ def test_cellflow_smoke_runs_on_cellflow_shaped_zarr(tmp_path: Path):
     adata.write_zarr(tmp_path / "data.zarr")
 
     overrides = [
-        "+experiment=cellflow_smoke",
+        f"+experiment={experiment}",
         f"paths.target_adata={tmp_path / 'data.zarr'}",
         f"save.run_dir={tmp_path / 'run'}",
         f"callbacks.model_checkpoint.dirpath={tmp_path / 'ckpt'}",
@@ -121,3 +122,11 @@ def test_cellflow_smoke_on_controls_and_perturbed_in_separate_files(tmp_path: Pa
     no_split.write_zarr(paths[0])
     with pytest.raises(ValueError, match=r"is in some input files but not in \['ctrl.zarr'\]"):
         run("pca.overwrite=true", "run.allow_overwrite=true")
+
+
+def test_cellflow_flows_from_the_controls_and_genot_from_noise():
+    with initialize_config_dir(config_dir=str(Path(fit_cfm.__file__).parent / "configs"), version_base=None):
+        cellflow = compose(config_name="fit_cfm", overrides=["+experiment=cellflow"])
+        genot = compose(config_name="fit_cfm", overrides=["+experiment=[cellflow,genot]"])
+    assert not cellflow.training.generate_from_noise and not cellflow.inference.generate_from_noise
+    assert genot.training.generate_from_noise and genot.module.source_encoder_mlp_kwargs is not None

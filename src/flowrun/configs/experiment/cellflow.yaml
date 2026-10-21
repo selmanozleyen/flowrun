@@ -49,11 +49,15 @@ coupling:
   method: sinkhorn
   reg: 0.5
 
+training:
+  generate_from_noise: false        # the flow starts from the matched control cells
+
 probability_path:                   # CellFlow's default: constant noise 0
   name: linear_dirac
   sigma: 0.0
 
 inference:
+  generate_from_noise: false
   n_steps: 50
   solver_kwargs: {method: euler}
 

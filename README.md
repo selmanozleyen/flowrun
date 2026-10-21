@@ -29,6 +29,8 @@ its own split column and PCA rows written back.
 
 `configs/experiment/cellflow.yaml` holds CellFlow's settings (OT-matched CFM on `X_pca`, drug combinations
 pooled with attention, cell line as the group); `cellflow_smoke` is a small version for checking the wiring.
+`genot` layers GENOT on top (generate from noise, conditioned on the encoded source cell):
+`+experiment=[cellflow,genot]`.
 
 ## Layout
 
