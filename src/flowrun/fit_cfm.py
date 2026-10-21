@@ -486,6 +486,7 @@ def main(config: DictConfig) -> float:
     )
     mmd = MaximumMeanDiscrepancy(
         gammas=config.metrics.mmd.gammas,
+        max_samples=config.metrics.mmd.max_samples,
         dist_sync_on_step=config.metrics.mmd.dist_sync_on_step,
     )
     metrics = {

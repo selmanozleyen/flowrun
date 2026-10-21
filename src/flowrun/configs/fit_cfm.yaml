@@ -278,6 +278,7 @@ metrics:
     max_samples: 4096   # rows scored per batch; validation scores every sample of every cell
   mmd:
     gammas: [1.0, 2.0, 4.0, 8.0, 16.0]
+    max_samples: 4096
     dist_sync_on_step: false
 
 # -----------------------------------------------------------------------------
