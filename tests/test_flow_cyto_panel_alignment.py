@@ -14,7 +14,7 @@ import pytest
 import yaml
 from hydra import compose, initialize_config_dir
 
-from flowrun import fit_cfm, panels, split
+from flowrun import evaluate, fit_cfm, panels, split
 
 CONFIGS = str(Path(fit_cfm.__file__).parent / "configs")
 
@@ -153,6 +153,18 @@ def test_panel_smoke_runs(tiny_panels: list[Path], tmp_path: Path) -> None:
     assert summary["params/coupling.method"] == "fused" and summary["params/run.splitter_seed"] == 42
     assert {"best/val/edist", "best/test/edist", "best/epoch"} <= set(summary)  # the best epoch's, for sorting
     assert (tmp_path / "run" / "config_resolved.yaml").is_file()
+
+    result = evaluate.evaluate(tmp_path / "run", n_cells=60, k=5)  # per cell, on the saved model
+    for name in ("model", "baseline_nearest_on_shared", "baseline_random"):
+        assert set(result[name]) == {
+            "shared_r_per_marker",
+            "shared_r_per_cell",
+            "shared_rmse",
+            "neighbourhood_preservation",
+        }
+    nearest, random = result["baseline_nearest_on_shared"], result["baseline_random"]
+    assert nearest["shared_r_per_marker"] > random["shared_r_per_marker"]  # matching on the shared markers keeps them
+    assert (tmp_path / "run" / "evaluation.json").is_file()
     (resolved,) = (tmp_path / "wandb").rglob("config_resolved.yaml")
     assert yaml.safe_load(resolved.read_text())["splitter"]["split_key"] == "split_42"  # interpolations resolved
 
