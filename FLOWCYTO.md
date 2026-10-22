@@ -31,14 +31,19 @@ mkdir -p "${FLOWCYTO_ROOT}/out/dumps/sweeps_smoke";
 
 # We export the directory names
 export FLOWCYTO_RAW_DIR="${FLOWCYTO_ROOT}/raw_data";
+export FLOWCYTO_OUT_DATA="${FLOWCYTO_ROOT}/out/data"
 export FLOWCYTO_RUNS_DIR="${FLOWCYTO_ROOT}/out/dumps/runs";
 export FLOWCYTO_RUNS_SMOKE_DIR="${FLOWCYTO_ROOT}/out/dumps/runs_smoke";
 export FLOWCYTO_SWEEPS_DIR="${FLOWCYTO_ROOT}/out/dumps/sweeps";
 export FLOWCYTO_SWEEPS_SMOKE_DIR="${FLOWCYTO_ROOT}/out/dumps/sweeps_smoke";
 
+# We export the variable for the raw data paths.
+export FLOWCYTO_OLD_DATA_RAW="${FLOWCYTO_RAW_DIR}/OH_OH0013_OLD_UMAP_annotated_red.h5ad"
+export FLOWCYTO_NEW_DATA_RAW="${FLOWCYTO_RAW_DIR}/260331_OH013_New_Panel_annotated_red.h5ad"
+
 # We also export the variables for the new data paths
-export FLOWCYTO_OLD_DATA="${FLOWCYTO_ROOT}/out/data/OH_OH0013_OLD_UMAP_annotated_red.zarr"
-export FLOWCYTO_NEW_DATA="${FLOWCYTO_ROOT}/out/data/260331_OH013_New_Panel_annotated_red.zarr"
+export FLOWCYTO_OLD_DATA="${FLOWCYTO_OUT_DATA}/OH_OH0013_OLD_UMAP_annotated_red.zarr"
+export FLOWCYTO_NEW_DATA="${FLOWCYTO_OUT_DATA}/260331_OH013_New_Panel_annotated_red.zarr"
 ```
 
 ## 1. Download the data from the drive.
@@ -63,6 +68,13 @@ This will dowload three files in the from the Google drive -- written by default
 1. **Spectral flow cytometry measurements with the old panel**: `OH_OH0013_OLD_UMAP_annotated_red.h5ad`.
 2. **Spectral flow cytometry measurements with the new panel**: `260331_OH013_New_Panel_annotated_red.h5ad`.
 3. **CITESeq measurements**: `/lustre/groups/ml01/projects/FlowCytometry/raw_data/260413_HID_SAK_NewAnno_15k_v4.2_final_redmod.h5ad`.
+
+Let's double check the contents of the raw data directory:
+
+```bash
+ls "${FLOWCYTO_RAW_DIR}";
+# Expected: -> 260331_OH013_New_Panel_annotated_red.h5ad          OH_OH0013_OLD_UMAP_annotated_red.h5ad 260413_HID_SAK_NewAnno_15k_v4.2_final_redmod.h5ad
+```
 
 ---
 
@@ -99,10 +111,10 @@ Then run the script to prepare the data with `uv`:
 
 ```bash
 uv run python -m flowrun.panels \
-  --out /lustre/groups/ml01/projects/FlowCytometry/out/data \
+  --out "${FLOWCYTO_OUT_DATA}" \
   --rename CD41a=CD41 EPCR=CD201 \
-  --panel "old panel" /lustre/groups/ml01/workspace/lorenzo.consoli/projects/CITEseq_Imputation_Cambridge/data/CITEseq-imputation/OH_OH0013_OLD_UMAP_annotated_red.h5ad \
-  --panel "new panel" /lustre/groups/ml01/workspace/lorenzo.consoli/projects/CITEseq_Imputation_Cambridge/data/CITEseq-imputation/260331_OH013_New_Panel_annotated_red.h5ad \
+  --panel "old panel" "${FLOWCYTO_OLD_DATA_RAW}" \
+  --panel "new panel" "${FLOWCYTO_NEW_DATA_RAW}" \
   2>&1 | tee prepare_data.log
 ```
 
@@ -164,6 +176,7 @@ uv run python -m flowrun.fit_cfm \
     loggers.wandb.save_dir="${RUN_DIR}/wandb" \
     loggers.csv.save_dir="${RUN_DIR}/csv" \
     trainer.default_root_dir="${RUN_DIR}/logs" \
+    trainer.accelerator=cpu \
     2>&1 | tee train_smoke.log
 ```
 
@@ -232,6 +245,7 @@ export FLOWRUN_SWEEP_DIR="${FLOWCYTO_SWEEPS_SMOKE_DIR}";
 uv run --extra sweep python -m flowrun.fit_cfm --multirun \
     +experiment=flow_cyto_panel_alignment_sweep_smoke \
     paths.target_adata="['${FLOWCYTO_OLD_DATA}','${FLOWCYTO_NEW_DATA}']" \
+    trainer.accelerator=cpu \
     2>&1 | tee sweep_fused_smoke.log
 ```
 
@@ -245,7 +259,7 @@ uv run --extra sweep python -m flowrun.fit_cfm --multirun \
     loggers.wandb.offline=False \
     hydra/launcher=submitit_slurm \
     hydra.launcher.partition="gpu_p" \
-    hydra.launcher.qos="gpu_priority" \
+    hydra.launcher.qos="gpu_normal" \
     hydra.launcher.cpus_per_task=6 \
     hydra.launcher.mem_gb=64 \
     hydra.launcher.gres="gpu:1" \
@@ -295,9 +309,9 @@ Maybe we can consider adding the following block to the configuration of the swe
 hydra:
   launcher:
     partition: gpu_p
-    qos: gpu_priority
+    qos: gpu_normal
     cpus_per_task: 6
-    mem_gb: 500
+    mem_gb: 64
     gres: gpu:1
     timeout_min: 1440
     array_parallelism: 10
@@ -309,13 +323,13 @@ For the moment, these fields are overriden through CLI in the submission of the 
 
 ## TODOs and next steps:
 
-- Check that the runs went through and how they converged. 
-- Write script for prediction.
+- [] Check that the runs went through and how they converged. 
+- [] Write script for prediction.
 
-- Increase grid:
-    - Bigger models.
-    - More coupling configurations.
-    - More hyperparamaters:
-        - maybe as Selman suggested, start generation from uniform over hypercube instead of isotropic gaussian; this would require changes to `sckitflow`.
-        - maybe try different time features and conditioning: we should anyway implement the `FiLM` conditionining in `sckitflow.`
-    - Different paths?
+- [] Increase grid:
+    - [] Bigger models.
+    - [] More coupling configurations.
+    - [] More hyperparamaters:
+        - [] Maybe do as as Selman suggested: start generation from uniform over hypercube instead of isotropic gaussian; this would require changes to `sckitflow`.
+        - [] Maybe try different time features and conditioning: we should anyway implement the `FiLM` conditionining in `sckitflow.`
+    - [] Different paths?
