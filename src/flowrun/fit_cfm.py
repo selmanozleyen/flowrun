@@ -82,6 +82,7 @@ Outputs
 - Return value: the best (else last) value of the monitored metric; an error if it was never logged.
 """
 
+import json
 from pathlib import Path
 from typing import Any
 
@@ -128,6 +129,7 @@ from sckitflow.data import DataManagerConfig, FlowDataModule
 from sckitflow.trainer import TrainingPlan
 
 from flowrun import split
+from flowrun._callbacks import BestMetrics
 from flowrun._store import exclusive, read_obs_column, write_obs_column
 from flowrun.panels import from_state
 from flowrun.preprocess import preprocess, write_preprocessing
@@ -190,6 +192,26 @@ def read_zarr_input(path: Path, config: DictConfig) -> ad.AnnData:
         cols=sorted(c for c in cols if c is not None and c in group["obs"]),
         uns=sorted(k for k in uns if k in group.get("uns", {})),
     )
+
+
+KEY_PARAMETERS = (
+    "coupling.method",
+    "coupling.epsilon",
+    "coupling.alpha",
+    "coupling.reg",
+    "coupling.scale_cost",
+    "coupling.inner_stop_thr",
+    "datamanager.lin_from_state",
+    "datamanager.quad_from_state",
+    "run.splitter_seed",
+)
+
+
+def key_parameters(config: DictConfig) -> dict:
+    """``params/<key>`` for the settings that tell runs apart; the full config is the run's W&B config."""
+    return {
+        f"params/{k}": OmegaConf.select(config, k) for k in KEY_PARAMETERS if OmegaConf.select(config, k) is not None
+    }
 
 
 def split_labels(obs, splitter: DictConfig, *, seed: int):
@@ -606,7 +628,8 @@ def main(config: DictConfig) -> float:
         every_n_epochs=config.callbacks.model_checkpoint.every_n_epochs,
         save_on_train_epoch_end=config.callbacks.model_checkpoint.save_on_train_epoch_end,
     )
-    callbacks = [early_stopping, grad_accumulation, lr_monitor, model_checkpoint]
+    best_metrics = BestMetrics(config.callbacks.model_checkpoint.monitor, config.callbacks.model_checkpoint.mode)
+    callbacks = [early_stopping, grad_accumulation, lr_monitor, model_checkpoint, best_metrics]
 
     # Configuring the training plugins.
     plugins = None  # TODO
@@ -686,7 +709,23 @@ def main(config: DictConfig) -> float:
                 f"The monitored metric {monitored!r} was never logged (logged: {sorted(trainer.callback_metrics)})."
             )
         returned_metric = float(score)
-        logger.info(f"Finishing the run with {monitored} of {returned_metric:.4f}")
+        # The best epoch's metrics and the parameters that tell runs apart: W&B's summary (sortable columns, without
+        # the training bookkeeping, whose curves stay in the history) and the saved model's folder, with its config.
+        summary = {**best_metrics.summary(), **key_parameters(config)}
+        run_summary = wandb_logger.experiment.summary
+        run_summary.update(summary)
+        for key in [
+            k
+            for k in run_summary.keys()
+            if k in ("loss", "epoch", "trainer/global_step") or k.startswith("lr-")  # noqa: SIM118, W&B summary
+        ]:
+            del run_summary[key]
+        save_dir = Path(config.save.run_dir)
+        (save_dir / "summary.json").write_text(json.dumps(summary, indent=2))
+        OmegaConf.save(config, save_dir / "config_resolved.yaml", resolve=True)
+        logger.info(
+            f"Finishing the run with {monitored} of {returned_metric:.4f}; summary in {save_dir / 'summary.json'}"
+        )
         return returned_metric
     finally:
         # a run left open is reused by the next fit in this process (in-process sweeps, tests)

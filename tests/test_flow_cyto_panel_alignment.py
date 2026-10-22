@@ -1,5 +1,6 @@
 """The panel imputation experiments (ported from theislab/sckitflow#202)."""
 
+import json
 import math
 import re
 import subprocess
@@ -148,6 +149,10 @@ def test_panel_smoke_runs(tiny_panels: list[Path], tmp_path: Path) -> None:
     assert not set(new.obsm) & {"state_from_layer", "shared_features", "own_features"}  # the reps stay in memory
     hparams = yaml.safe_load(next((tmp_path / "csv").rglob("hparams.yaml")).read_text())
     assert hparams["coupling"]["method"] == "fused" and hparams["datamanager"]["lin_from_state"]  # resolved config
+    summary = json.loads((tmp_path / "run" / "summary.json").read_text())
+    assert summary["params/coupling.method"] == "fused" and summary["params/run.splitter_seed"] == 42
+    assert {"best/val/edist", "best/test/edist", "best/epoch"} <= set(summary)  # the best epoch's, for sorting
+    assert (tmp_path / "run" / "config_resolved.yaml").is_file()
     (resolved,) = (tmp_path / "wandb").rglob("config_resolved.yaml")
     assert yaml.safe_load(resolved.read_text())["splitter"]["split_key"] == "split_42"  # interpolations resolved
 
