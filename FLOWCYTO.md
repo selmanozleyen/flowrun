@@ -272,7 +272,7 @@ uv run --extra sweep python -m flowrun.fit_cfm --multirun \
 
 ```bash
 export FLOWRUN_SWEEP_DIR="${FLOWCYTO_SWEEPS_DIR}";
-SWEEP_TYPE="flow_cyto_panel_alignment_sweep_linear_bigger_model";
+SWEEP_TYPE="flow_cyto_panel_alignment_sweep_linear_massive_model";
 sbatch \
   --job-name="${SWEEP_TYPE}" \
   --partition=cpu_p \
@@ -296,7 +296,10 @@ sbatch \
       hydra.launcher.mem_gb=64 \
       hydra.launcher.gres=\"gpu:1\" \
       hydra.launcher.timeout_min=1440 \
-      hydra.launcher.array_parallelism=10"
+      hydra.launcher.array_parallelism=10 \
+      trainer.max_epochs=100 \
+      callbacks.early_stopping.patience=30 \
+      2>&1 | tee sweep_sbatch.log"
 ```
 
 ---
