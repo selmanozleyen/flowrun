@@ -40,6 +40,11 @@ optional-dependencies.test = [
 ]
 scripts.flowrun-fit-cfm = "flowrun.fit_cfm:main"
 
+optional-dependencies.notebook = [
+    "ipykernel>=7.4.0",
+    "jupyter>=1.1.1",
+]
+
 [tool.hatch]
 build.targets.wheel.packages = [ "src/flowrun" ]
 
