@@ -714,11 +714,8 @@ def main(config: DictConfig) -> float:
         summary = {**best_metrics.summary(), **key_parameters(config)}
         run_summary = wandb_logger.experiment.summary
         run_summary.update(summary)
-        for key in [
-            k
-            for k in run_summary.keys()
-            if k in ("loss", "epoch", "trainer/global_step") or k.startswith("lr-")  # noqa: SIM118, W&B summary
-        ]:
+        keys = list(run_summary.keys())  # W&B's summary is not a dict
+        for key in [k for k in keys if k in ("loss", "epoch", "trainer/global_step") or k.startswith("lr-")]:
             del run_summary[key]
         save_dir = Path(config.save.run_dir)
         (save_dir / "summary.json").write_text(json.dumps(summary, indent=2))
