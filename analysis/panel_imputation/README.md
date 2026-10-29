@@ -54,3 +54,19 @@ per-marker density plots (`markers_*.png`).
 - Compute nodes have no `rsync`; the scripts use `cp -a`.
 - `prep_newonly.py` writes with `annbatch.io.write_sharded`. anndata's own zarr writers give a chunk layout the
   annbatch loader cannot read.
+
+## Results
+
+The CSVs behind the doc's tables are in [`results/`](results). The full outputs (plots, logs, checkpoints) stay on
+the cluster: `$WS/out_*` for the analysis scripts and `/lustre/groups/ml01/workspace/$USER/fci_runs/` for the runs.
+
+| dir | from | run |
+|---|---|---|
+| `flow_small_grid` | `run_diag.sh` | `fci_runs/grid_2026-10-22_07-43-14/3`, the 4 sampling settings |
+| `flow_wide_src64` | `diagnose.py` on a mid-training checkpoint | capacity grid, wide + src64 |
+| `capacity_*` | `run_capacity.sh` | `fci_runs/capacity_2026-10-26_19-35/<variant>` |
+| `sharp_eps*` | `run_sharp.sh` | `fci_runs/sharp_2026-10-26_19-59/eps<eps>` (eps 0.05 killed: always fell back) |
+| `gmm_baseline` | `run_gmm.sh` | GMM K = 20, conditional and unconditional, old cells |
+| `gmm_percell` | `run_gmm_percell.sh` | GMM, kNN, linear per cell in the new panel |
+| `k_sweep` | `run_obs_k.sh` | K sweep, mean over 2 seeds |
+| `flow_newonly` | `run_newonly_eval.sh` | `fci_runs/newonly_2026-10-26_21-03` |
