@@ -131,7 +131,7 @@ def test_cellflow_flows_from_the_controls_and_genot_from_noise():
         cellflow = compose(config_name="fit_cfm", overrides=["+experiment=cellflow"])
         genot = compose(config_name="fit_cfm", overrides=["+experiment=[cellflow,genot]"])
     assert not cellflow.training.generate_from_noise and not cellflow.inference.generate_from_noise
-    assert genot.training.generate_from_noise and genot.module.source_encoder_mlp_kwargs is not None
+    assert genot.training.generate_from_noise and genot.module.source_encoder is not None
 
 
 def test_one_out_dir_places_every_output():

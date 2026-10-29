@@ -139,7 +139,7 @@ def test_panel_smoke_runs(tiny_panels: list[Path], tmp_path: Path) -> None:
     ]
     with initialize_config_dir(config_dir=CONFIGS, version_base=None):
         cfg = compose(config_name="fit_cfm", overrides=overrides)
-    assert cfg.coupling.method == "fused" and cfg.module.conditioning_id == "resnet1d"
+    assert cfg.coupling.method == "fused" and cfg.module.conditioning.type == "nn.conditioning.resnet"
     score = fit_cfm.main.__wrapped__(cfg)
     assert math.isfinite(score)  # the monitored val/edist was logged, not a missing metric
     assert (tmp_path / "run" / "config.json").is_file()
@@ -208,7 +208,7 @@ def test_the_panel_contract() -> None:
     assert dm.split_by == cfg.splitter.split_key == "split_42"
     assert dict(dm.control_values_dict) == {"panel": "old panel"}
     assert dict(dm.categorical_reps) == {"panel": "dataset"}
-    assert cfg.module.conditioning_id == "resnet1d" and cfg.module.source_encoder_output_dim == 16
+    assert cfg.module.conditioning.type == "nn.conditioning.resnet" and cfg.module.source_encoder.output_dim == 16
     assert cfg.training.generate_from_noise and cfg.inference.generate_from_noise
     assert cfg.callbacks.model_checkpoint.monitor == cfg.callbacks.early_stopping.monitor == "val/edist"
 

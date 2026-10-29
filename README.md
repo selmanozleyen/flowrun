@@ -6,7 +6,7 @@ Hydra entry point that trains a flow-matching model from one YAML.
 ## Install
 
 ```bash
-uv sync --extra test
+uv sync --extra test --extra cu130   # or cu126 (V100s), cpu
 ```
 
 ## Train
@@ -36,7 +36,7 @@ pooled with attention, cell line as the group); `cellflow_smoke` is a small vers
 
 `+experiment=flow_cyto_panel_alignment` maps cells from an old flow cytometry marker panel onto a new one (fused Gromov-Wasserstein,
 a source encoder); `+experiment=flow_cyto_panel_alignment_sweep_fused` and `flow_cyto_panel_alignment_sweep_linear` sweep it with fused and linear OT
-with Optuna on SLURM (`uv sync`, then `flowrun-fit-cfm -m +experiment=flow_cyto_panel_alignment_sweep_fused`). The runbook is `docs/sweeps.md`.
+with Optuna on SLURM (`uv sync --extra cu126`, then `flowrun-fit-cfm -m +experiment=flow_cyto_panel_alignment_sweep_fused`). The runbook is `docs/sweeps.md`.
 
 ## Layout
 

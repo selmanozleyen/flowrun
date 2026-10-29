@@ -5,7 +5,7 @@ VF override it implies are **bundled together**, so they cannot drift.
 
 * ``_SCHEMA_PAIRS`` — datamanager schema (categorical_conditions, covariates, paired/
   unpaired, groups) paired with the VF configuration it requires — including
-  one ``condition_encoder_input_layers`` entry per condition key.
+  one condition-encoder input layer per condition key.
 * ``_COUPLING_PAIRS`` — coupling method paired with the datamanager reps
   it needs, plus the source encoder for quadratic couplings only.
 * ``_AXES`` — orthogonal dimensions on top of ``pair="one_cat_paired"``.
@@ -13,22 +13,20 @@ VF override it implies are **bundled together**, so they cannot drift.
 Invariants the pairing tables enforce
 -------------------------------------
 
-1. **One condition_encoder_input_layers entry per condition key.**
-   ``MLPVelocityConfig.condition_encoder_input_layers`` is keyed by the
-   same names that appear in ``dims.condition_reps_dims`` /
-   ``condition_continuous_dims`` / ``groups_reps_dims``. Each entry is an
-   ``MLPConfig``-shaped spec *without* ``input_dim`` — the build method
-   supplies it from ``dims``. The test pairs provide exactly the entries
-   their DM produces, so the per-condition input-layer path is exercised
-   end-to-end. ``condition_encoder_input_layers`` defaults to ``null`` in
-   the YAML; overrides use bare ``path=value`` (not the ``~ +`` pattern)
-   because Hydra's ``~`` fails on null-valued keys.
+1. **One condition-encoder input layer per condition key.**
+   ``module.condition_encoder`` is a set encoder spec whose
+   ``categorical_input_layers`` / ``continuous_input_layers`` are keyed by the
+   same names that appear in ``dims.condition_reps_dims`` + ``groups_reps_dims`` /
+   ``condition_continuous_dims``; their input widths come from ``dims``. The
+   test pairs provide exactly the entries their DM produces, so the
+   per-condition input-layer path is exercised end-to-end.
+   ``module.condition_encoder`` defaults to ``null`` in the YAML; overrides
+   use bare ``path=value`` (not the ``~ +`` pattern) because Hydra's ``~``
+   fails on null-valued keys.
 
-2. **Source encoder is off by default.**  ``source_encoder_output_dim`` and
-   ``source_encoder_mlp_kwargs`` are ``null``; ``_resolve_or_none`` in the
-   script preserves that through pydantic so ``MLPVelocity`` doesn't build
-   the branch. Only quadratic couplings (``gromov-wasserstein``,
-   ``fused``) turn it on via ``_enable_source_encoder``.
+2. **Source encoder is off by default.**  ``module.source_encoder`` is
+   ``null``. Only quadratic couplings (``gromov-wasserstein``, ``fused``)
+   turn it on via ``_enable_source_encoder``.
 
 3. **Every schema needs a real group column.**  ``groups=[]`` makes the
    loader emit a synthetic ``_sckitflow_all_cells`` axis whose 1-tuple
@@ -127,8 +125,7 @@ def set_field(section: str, key: str, value) -> str:
     Works for ``null``-valued keys — ``overrides()`` fails at compose time
     on those (``~path`` raises "Could not delete from config"). Use this
     for any field whose YAML default is ``null``:
-    ``condition_encoder_input_layers``, ``source_encoder_*``,
-    ``conditioning_kwargs``, etc.
+    ``module.condition_encoder``, ``module.source_encoder``, etc.
     """
     return f"{section}.{key}={_render(value)}"
 
@@ -176,19 +173,22 @@ def _dm_shared(**overrides_kwargs) -> dict:
 # --------------------------- VF per-condition layers -----------------------
 
 
-def _per_condition_layers(keys: list[str]) -> str:
-    """``module.condition_encoder_input_layers=...`` override.
+def _per_condition_layers(categorical: list[str], continuous: list[str] = ()) -> str:
+    """``module.condition_encoder=...`` override: a set encoder with one input layer per key.
 
-    One entry per key (a condition name, a covariate name, or a group name
-    from the DM config). The spec is ``MLPConfig``-shaped and doesn't
-    include ``input_dim`` — ``MLPVelocityConfig.build`` fills it from
-    ``dims``.
+    ``categorical`` are condition and group names, ``continuous`` covariate names from the DM
+    config; the input widths come from ``dims``.
 
     Uses bare ``path=value`` (no ``~``): the YAML default is ``null`` and
     Hydra's ``~`` fails on null-valued keys.
     """
-    spec = {key: {"output_dim": 2} for key in keys}
-    return set_field("module", "condition_encoder_input_layers", spec)
+    spec = {
+        "output_dim": 8,
+        "pooling_proj_dim": 8,
+        "categorical_input_layers": {key: {"output_dim": 2, "mlp": {}} for key in categorical},
+        "continuous_input_layers": {key: {"output_dim": 2, "mlp": {}} for key in continuous},
+    }
+    return set_field("module", "condition_encoder", spec)
 
 
 # --------------------------- override lookups ------------------------------
@@ -197,26 +197,19 @@ def _per_condition_layers(keys: list[str]) -> str:
 _OVERRIDES_MODULE_SCALE: list[tuple[str, list[str]]] = [
     (
         "minimal",
-        overrides(
-            "module",
-            num_time_features=8,
-            state_encoder_output_dim=16,
-            time_encoder_output_dim=16,
-            # source_encoder_* left off — off by YAML default
-            condition_encoder_output_dim=8,
-            condition_encoder_pooling_proj_dim=8,
-        ),
+        [
+            "module.time_features.n_time_features=8",
+            "module.state_encoder.output_dim=16",
+            "module.time_encoder.output_dim=16",
+        ],
     ),
     (
         "medium",
-        overrides(
-            "module",
-            num_time_features=16,
-            state_encoder_output_dim=32,
-            time_encoder_output_dim=32,
-            condition_encoder_output_dim=16,
-            condition_encoder_pooling_proj_dim=16,
-        ),
+        [
+            "module.time_features.n_time_features=16",
+            "module.state_encoder.output_dim=32",
+            "module.time_encoder.output_dim=32",
+        ],
     ),
 ]
 
@@ -272,7 +265,7 @@ SOURCE_SPLIT_LABELS = {"type": "group_encoder.label", "classes": [f"source_split
 # --------------------------- schema pairs ----------------------------------
 _SCHEMA_PAIRS: dict[str, tuple[list[str], list[str]]] = {
     # ---- Group-only, unpaired -----------------------------------------
-    # No categorical_conditions → no condition_encoder_input_layers entries.
+    # No categorical_conditions → only the group's input layer.
     "groups_only": (
         overrides(
             "datamanager",
@@ -296,7 +289,7 @@ _SCHEMA_PAIRS: dict[str, tuple[list[str], list[str]]] = {
                 groups_encoding={"source_split": SOURCE_SPLIT_LABELS},
             ),
         ),
-        [_per_condition_layers(["X_tgt", "source_split"])],
+        [_per_condition_layers(["source_split"], ["X_tgt"])],
     ),
     # ---- 1 categorical, unpaired --------------------------------------
     "one_cat_unpaired": (
@@ -388,7 +381,7 @@ _SCHEMA_PAIRS: dict[str, tuple[list[str], list[str]]] = {
                 control_values_dict={"drug": "control"},
             ),
         ),
-        [_per_condition_layers(["drug", "X_tgt"])],
+        [_per_condition_layers(["drug"], ["X_tgt"])],
     ),
     "two_cat_one_cont_paired": (
         overrides(
@@ -401,7 +394,7 @@ _SCHEMA_PAIRS: dict[str, tuple[list[str], list[str]]] = {
                 control_values_dict={"drug": "control", "ko": "control"},
             ),
         ),
-        [_per_condition_layers(["drug", "ko", "X_tgt"])],
+        [_per_condition_layers(["drug", "ko"], ["X_tgt"])],
     ),
     # ---- alternative state representation -----------------------------
     "sample_rep_x_src": (
@@ -425,14 +418,11 @@ _SCHEMA_PAIRS: dict[str, tuple[list[str], list[str]]] = {
 def _enable_source_encoder() -> list[str]:
     """Enable the source encoder for quadratic couplings.
 
-    Bare ``key=value`` overrides (no ``~``) because the YAML sets
-    ``source_encoder_*`` to ``null``; Hydra's ``~`` (delete) fails on
+    A bare ``key=value`` override (no ``~``) because the YAML sets
+    ``module.source_encoder`` to ``null``; Hydra's ``~`` (delete) fails on
     null-valued keys.
     """
-    return [
-        "module.source_encoder_output_dim=16",
-        "module.source_encoder_mlp_kwargs={hidden_dims: [16], activation_cls: silu}",
-    ]
+    return ["module.source_encoder={output_dim: 16, mlp: {hidden_dims: [16], activation_cls: silu}}"]
 
 
 def _coupling_pair(
@@ -629,9 +619,9 @@ class TestScriptLoads:
 class TestFitCFMRunsSchemaPairs:
     """Schema matrix: categorical_conditions × covariates × paired/unpaired, all with groups.
 
-    Every pair supplies ``condition_encoder_input_layers`` with one entry per
+    Every pair supplies ``module.condition_encoder`` with one input layer per
     condition key its DM produces, so the per-condition input-layer path is
-    exercised in ``MLPVelocityConfig.build`` and ``MLPVelocity`` end-to-end.
+    exercised in ``NeuralVelocityConfig.build`` and ``NeuralVelocity`` end-to-end.
     """
 
     @pytest.mark.slow

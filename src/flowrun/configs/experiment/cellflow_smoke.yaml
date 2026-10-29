@@ -9,16 +9,17 @@ preprocessing:
   n_hvg: null
 
 module:
-  num_time_features: 32
-  time_encoder_output_dim: 64
-  state_encoder_output_dim: 64
-  state_encoder_mlp_kwargs: {hidden_dims: [128]}
-  vf_decoder_mlp_kwargs: {hidden_dims: [128, 128]}
-  condition_encoder_output_dim: 32
-  condition_encoder_pooling_kwargs: {num_heads: 2, qkv_dim: 16}
-  condition_encoder_input_layers:
-    drug: {output_dim: 32, hidden_dims: [64]}
-    cell_line: {output_dim: 32, hidden_dims: [64]}
+  time_features: {n_time_features: 32}
+  time_encoder: {output_dim: 64}
+  state_encoder: {output_dim: 64, mlp: {hidden_dims: [128]}}
+  field_decoder: {hidden_dims: [128, 128]}
+  condition_encoder:
+    output_dim: 32
+    pooling: {num_heads: 2, qkv_dim: 16}
+    categorical_input_layers:
+      drug: {output_dim: 32, mlp: {hidden_dims: [64]}}
+      cell_line: {output_dim: 32, mlp: {hidden_dims: [64]}}
+
 
 inference:
   n_steps: 10

@@ -155,70 +155,54 @@ preprocessing:
   overwrite: false                # replace a preprocessing already in the input file
 
 # -----------------------------------------------------------------------------
-# Velocity field network (`MLPVelocityConfig`)
+# Velocity field network: a `sckitflow.core.nn.NeuralVelocityConfig` spec, as in sckitflow's
+# docs/configs/cellflow.yaml. `type` picks the class; a `null` entry is dropped before parsing.
 #
-# Field names match `sckitflow.core.nn.MLPVelocityConfig`:
-#   encode_state, encode_time, time_features_id, num_time_features, max_period,
-#   state_encoder_output_dim, time_encoder_output_dim,
-#   state_encoder_mlp_kwargs, time_encoder_mlp_kwargs, vf_decoder_mlp_kwargs,
-#   conditioning_id, conditioning_kwargs, condition_encoder_input_layers,
-#   condition_encoder_output_dim, condition_encoder_pooling_*,
-#   condition_encoder_output_layers_kwargs,
-#   source_encoder_mlp_kwargs, source_encoder_output_dim
+# Condition encoder
+# -----------------
+# Off by default: the field then ignores the conditions. Turn it on with a set encoder, one input
+# layer per condition / group key (the input widths come from the data):
+#   module.condition_encoder='{output_dim: 64, categorical_input_layers: {drug: {output_dim: 32, mlp: {}}}}'
 #
-# Source encoder rule
-# -------------------
-# `source_encoder_*` is **off by default**. Only quadratic couplings
-# (``gromov-wasserstein`` / ``fused``) in a paired schema need the VF to
-# encode the source state. Linear OT couplings (``exact`` / ``sinkhorn`` /
-# ``partial`` / ``unbalanced``) couple samples for the interpolation path
-# but the VF itself does not need to see the source. Unpaired schemas have
-# no control pool → no source tensor at all.
-#
-# To enable for a quadratic-coupled run, override in the shell:
-#   module.source_encoder_output_dim=32 \
-#   module.source_encoder_mlp_kwargs.hidden_dims=[32] \
-#   module.source_encoder_mlp_kwargs.activation_cls=silu
+# Source encoder
+# --------------
+# Off by default. Only quadratic couplings (``gromov-wasserstein`` / ``fused``) in a paired schema
+# need the field to read the source state, and sources with their own state rep
+# (`datamanager.source_sample_rep`) require it:
+#   module.source_encoder='{output_dim: 32, mlp: {hidden_dims: [32], activation_cls: silu}}'
 # -----------------------------------------------------------------------------
 module:
-  encode_state: true
-  encode_time: true
-  time_features_id: "torch-cfm"
-  num_time_features: 64
-  max_period: 10000.0
-  state_encoder_output_dim: 128
-  time_encoder_output_dim: 128
-  state_encoder_mlp_kwargs:
+  type: nn.models.velocity
+  time_features:
+    type: nn.time_features.torch_cfm
+    n_time_features: 64
+    max_period: 10000
+  time_encoder:
+    output_dim: 128
+    mlp:
+      hidden_dims: [128, 128]
+      activation_cls: "silu"
+      use_layernorm: true
+      use_batchnorm: false
+      dropout_p: 0.0
+  state_encoder:
+    output_dim: 128
+    mlp:
+      hidden_dims: [512, 512]
+      activation_cls: "silu"
+      use_layernorm: true
+      use_batchnorm: false
+      dropout_p: 0.0
+  field_decoder:
     hidden_dims: [512, 512]
     activation_cls: "silu"
     use_layernorm: true
     use_batchnorm: false
     dropout_p: 0.0
-  time_encoder_mlp_kwargs:
-    hidden_dims: [128, 128]
-    activation_cls: "silu"
-    use_layernorm: true
-    use_batchnorm: false
-    dropout_p: 0.0
-  vf_decoder_mlp_kwargs:
-    hidden_dims: [512, 512]
-    activation_cls: "silu"
-    use_layernorm: true
-    use_batchnorm: false
-    dropout_p: 0.0
-  conditioning_id: "concat"
-  conditioning_kwargs: null
-  condition_encoder_input_layers: null
-  condition_encoder_output_dim: 64
-  condition_encoder_pooling_mode: "mean"
-  condition_encoder_pooling_kwargs: {}
-  condition_encoder_pooling_proj_dim: 64
-  condition_encoder_pooling_proj_bias: true
-  condition_encoder_output_layers_kwargs:
-    hidden_dims: [128]
-    activation_cls: "silu"
-  source_encoder_mlp_kwargs: null
-  source_encoder_output_dim: null
+  conditioning:
+    type: nn.conditioning.concat
+  condition_encoder: null
+  source_encoder: null
 
 # -----------------------------------------------------------------------------
 # Training method (`CFMTrainingConfig`)

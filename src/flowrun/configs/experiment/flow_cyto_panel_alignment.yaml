@@ -1,7 +1,7 @@
 # @package _global_
 # Flow cytometry panel alignment (ported from theislab/sckitflow#202): map cells measured on an old marker panel onto a
 # new one. Fused Gromov-Wasserstein matching (a shared linear term on the markers both panels measure, a quadratic
-# term per panel), `resnet1d` conditioning, and a source encoder: the flow generates new-panel cells from noise,
+# term per panel), ResNet conditioning, and a source encoder: the flow generates new-panel cells from noise,
 # conditioned on the encoded old-panel cell.
 #   flowrun-fit-cfm +experiment=flow_cyto_panel_alignment paths.out_dir=runs/<name>
 # The inputs are the two panels as prepared by `python -m flowrun.panels` (markers renamed for synonyms, labelled,
@@ -39,20 +39,13 @@ datamodule:
   batch_size: 256
 
 module:
-  time_features_id: ott-jax
-  num_time_features: 256
-  state_encoder_output_dim: 16
-  time_encoder_output_dim: 16
-  state_encoder_mlp_kwargs: {hidden_dims: [32], activation_cls: silu}
-  time_encoder_mlp_kwargs: {hidden_dims: [32], activation_cls: silu}
-  vf_decoder_mlp_kwargs: {hidden_dims: [64, 64], activation_cls: silu}
-  conditioning_id: resnet1d
-  condition_encoder_output_dim: 32
-  condition_encoder_pooling_mode: mean
-  condition_encoder_pooling_proj_dim: 32
-  condition_encoder_output_layers_kwargs: {hidden_dims: [32], activation_cls: silu}
-  source_encoder_mlp_kwargs: {hidden_dims: [32], activation_cls: silu}   # fused GW: the flow reads the source
-  source_encoder_output_dim: 16
+  time_features: {type: nn.time_features.ott_jax, n_time_features: 256, max_period: null}
+  time_encoder: {output_dim: 16, mlp: {hidden_dims: [32]}}
+  state_encoder: {output_dim: 16, mlp: {hidden_dims: [32]}}
+  field_decoder: {hidden_dims: [64, 64]}
+  conditioning: {type: nn.conditioning.resnet}
+  source_encoder: {output_dim: 16, mlp: {hidden_dims: [32], activation_cls: silu}}   # fused GW: the flow reads the source
+
 
 training:
   generate_from_noise: true
