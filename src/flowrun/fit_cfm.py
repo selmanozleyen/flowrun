@@ -12,7 +12,7 @@ Pipeline (in the order ``main`` executes them)
 2. Load AnnData from disk (``read_adatas``; paths in ``config.paths``).
 3. Write the split column from ``config.splitter`` (``flowrun.split``: control/train/val/test
    labels) and a ``FlowDataModule`` from ``config.datamanager`` + ``config.datamodule``.
-4. Build the MLP velocity field (``MLPVelocityConfig`` from ``config.module``).
+4. Build the velocity field (``NeuralVelocityConfig``, from the spec in ``config.module``).
 5. Build the base training method (``CFMTrainingConfig``), wrap it in a
    ``MatchedTrainingConfig`` that pairs source/target samples according to
    ``config.coupling``, and build the inference method (``ODEInferenceConfig``).
@@ -118,7 +118,7 @@ from sckitflow.core.coupling import (
 )
 from sckitflow.core.methods import CFMTrainingConfig, MatchedTrainingConfig, ODEInferenceConfig
 from sckitflow.core.metrics import EnergyDistance, MaximumMeanDiscrepancy
-from sckitflow.core.nn import MLPVelocityConfig
+from sckitflow.core.nn import NeuralVelocityConfig
 from sckitflow.core.probability_paths import (
     LinearDiracProbabilityPathConfig,
     LinearGaussianProbabilityPathConfig,
@@ -149,6 +149,14 @@ def resolve_omegaconf_to_dictionary(conf_dict: dict[str, Any] | None | DictConfi
             out_dict = OmegaConf.create(out_dict)
         out_dict = OmegaConf.to_container(out_dict, resolve=True)
     return out_dict
+
+
+def drop_nulls(spec):
+    """``spec`` without its ``null`` entries, at every depth. Hydra merges an experiment's sub-spec into the base one,
+    so a key the new ``type`` does not take is set to ``null`` there (e.g. ``max_period`` for ``ott_jax``)."""
+    if isinstance(spec, dict):
+        return {k: drop_nulls(v) for k, v in spec.items() if v is not None}
+    return [drop_nulls(v) for v in spec] if isinstance(spec, list) else spec
 
 
 def enable_zarrs() -> None:
@@ -361,36 +369,7 @@ def main(config: DictConfig) -> float:
     # The dimensionalities are automatically inferred from the
     # data_dims object, linked to the datamodule.
     logger.info("Initializing neural velocity field.")
-    module_cfg = MLPVelocityConfig(
-        encode_state=config.module.encode_state,
-        encode_time=config.module.encode_time,
-        time_features_id=config.module.time_features_id,
-        num_time_features=config.module.num_time_features,
-        max_period=config.module.max_period,
-        state_encoder_output_dim=config.module.state_encoder_output_dim,
-        time_encoder_output_dim=config.module.time_encoder_output_dim,
-        state_encoder_mlp_kwargs=resolve_omegaconf_to_dictionary(config.module.state_encoder_mlp_kwargs),
-        time_encoder_mlp_kwargs=resolve_omegaconf_to_dictionary(config.module.time_encoder_mlp_kwargs),
-        vf_decoder_mlp_kwargs=resolve_omegaconf_to_dictionary(config.module.vf_decoder_mlp_kwargs),
-        conditioning_id=config.module.conditioning_id,
-        conditioning_kwargs=resolve_omegaconf_to_dictionary(config.module.conditioning_kwargs),
-        condition_encoder_input_layers=resolve_omegaconf_to_dictionary(config.module.condition_encoder_input_layers)
-        or None,
-        condition_encoder_output_dim=config.module.condition_encoder_output_dim,
-        condition_encoder_pooling_mode=config.module.condition_encoder_pooling_mode,
-        condition_encoder_pooling_kwargs=resolve_omegaconf_to_dictionary(
-            config.module.condition_encoder_pooling_kwargs
-        ),
-        condition_encoder_pooling_proj_dim=config.module.condition_encoder_pooling_proj_dim,
-        condition_encoder_pooling_proj_bias=config.module.condition_encoder_pooling_proj_bias,
-        condition_encoder_output_layers_kwargs=resolve_omegaconf_to_dictionary(
-            config.module.condition_encoder_output_layers_kwargs
-        ),
-        source_encoder_mlp_kwargs=None
-        if config.module.source_encoder_mlp_kwargs is None
-        else resolve_omegaconf_to_dictionary(config.module.source_encoder_mlp_kwargs),
-        source_encoder_output_dim=config.module.source_encoder_output_dim,
-    )
+    module_cfg = NeuralVelocityConfig.from_spec(drop_nulls(OmegaConf.to_container(config.module, resolve=True)))
     module = module_cfg.build(datamodule.data_dims)
 
     # Initialize probability path

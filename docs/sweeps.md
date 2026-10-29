@@ -10,7 +10,7 @@ own SLURM job through submitit:
 
 | Config | Role |
 |---|---|
-| `experiment/flow_cyto_panel_alignment.yaml` | Panel alignment: fused Gromov-Wasserstein, `resnet1d` conditioning, source encoder on |
+| `experiment/flow_cyto_panel_alignment.yaml` | Panel alignment: fused Gromov-Wasserstein, ResNet conditioning, source encoder on |
 | `experiment/flow_cyto_panel_alignment_smoke.yaml` | The same at toy size, `fast_dev_run`, CPU |
 | `experiment/flow_cyto_panel_alignment_sweep.yaml` | What both sweeps share: the data axis, launcher, sampler, output dirs |
 | `experiment/flow_cyto_panel_alignment_sweep_fused.yaml` | The fused GW sweep |
@@ -126,8 +126,8 @@ with `wandb sync --sync-all <sweep dir>`; each sweep is its own W&B group, named
 Add axes to `hydra.sweeper.params` in `flow_cyto_panel_alignment_sweep_fused.yaml` (or `_linear`), one at a time, and raise `n_trials` with the space:
 
 ```yaml
-module.state_encoder_output_dim: choice(16, 32)
-module.condition_encoder_output_dim: choice(32, 64)
+module.state_encoder.output_dim: choice(16, 32)
+module.time_encoder.output_dim: choice(16, 32)
 ```
 
 For wide spaces drop the `override /hydra/sweeper/sampler: random` line to use Optuna's TPE sampler, which

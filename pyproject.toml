@@ -33,11 +33,11 @@ dependencies = [
   "zarr>=3",
   "zarrs",
 ]
-# Accelerator selectors: torch from the matching PyTorch index.
+# Accelerator selectors: torch from the matching PyTorch index and, on CUDA, cupy of the same major.
 # The V100s in gpu_p need cu126; CUDA 13 torch has no kernels for them.
 optional-dependencies.cpu = [ "torch" ]
-optional-dependencies.cu126 = [ "torch" ]
-optional-dependencies.cu130 = [ "torch" ]
+optional-dependencies.cu126 = [ "sckitflow[cupy-cuda12]", "torch" ]
+optional-dependencies.cu130 = [ "sckitflow[cupy-cuda13]", "torch" ]
 optional-dependencies.sweep = []  # the sweepers are core dependencies; kept so `--extra sweep` still installs
 optional-dependencies.test = [
   "pytest",

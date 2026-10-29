@@ -5,17 +5,12 @@ defaults:
   - flow_cyto_panel_alignment
 
 module:
-  num_time_features: 16
-  state_encoder_output_dim: 4
-  time_encoder_output_dim: 4
-  state_encoder_mlp_kwargs: {hidden_dims: [8], activation_cls: silu}
-  time_encoder_mlp_kwargs: {hidden_dims: [8], activation_cls: silu}
-  vf_decoder_mlp_kwargs: {hidden_dims: [8, 8], activation_cls: silu}
-  condition_encoder_output_dim: 8
-  condition_encoder_pooling_proj_dim: 8
-  condition_encoder_output_layers_kwargs: {hidden_dims: [8], activation_cls: silu}
-  source_encoder_mlp_kwargs: {hidden_dims: [8], activation_cls: silu}
-  source_encoder_output_dim: 4
+  time_features: {n_time_features: 16}
+  time_encoder: {output_dim: 4, mlp: {hidden_dims: [8]}}
+  state_encoder: {output_dim: 4, mlp: {hidden_dims: [8]}}
+  field_decoder: {hidden_dims: [8, 8]}
+  source_encoder: {output_dim: 4, mlp: {hidden_dims: [8]}}
+
 
 coupling:
   scale_cost: mean

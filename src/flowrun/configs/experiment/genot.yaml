@@ -14,5 +14,4 @@ inference:
   n_samples: 1                      # one generated target per source cell
 
 module:
-  source_encoder_mlp_kwargs: {hidden_dims: [256]}
-  source_encoder_output_dim: 128
+  source_encoder: {output_dim: 128, mlp: {hidden_dims: [256]}}
