@@ -58,7 +58,11 @@ per-marker density plots (`markers_*.png`).
 ## Results
 
 The CSVs behind the doc's tables are in [`results/`](results). The full outputs (plots, logs, checkpoints) stay on
-the cluster: `$WS/out_*` for the analysis scripts and `/lustre/groups/ml01/workspace/$USER/fci_runs/` for the runs.
+the cluster, readable by the ml01 group:
+
+- analysis outputs, plots and logs: `/ictstr01/groups/ml01/workspace/selman.ozleyen/fci-diagnose/out_*`, `*.log`
+- runs (config, checkpoints, saved models): `/lustre/groups/ml01/workspace/selman.ozleyen/fci_runs/`
+- prepared panels: `/lustre/groups/ml01/datasets/selman.ozleyen/citeseq_panel/` (`prepared`, `prepared_newonly`)
 
 | dir | from | run |
 |---|---|---|
