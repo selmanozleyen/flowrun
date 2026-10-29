@@ -41,7 +41,7 @@ export FLOWRUN_SWEEP_DIR=/lustre/groups/<group>/<you>/sweeps
 ## 0. Setup
 
 ```bash
-uv sync
+uv sync --extra cu126   # V100s in gpu_p; cu130 for newer GPUs
 uv run python -c "import hydra, optuna, hydra_plugins.hydra_optuna_sweeper; print(hydra.__version__, optuna.__version__)"
 ```
 
