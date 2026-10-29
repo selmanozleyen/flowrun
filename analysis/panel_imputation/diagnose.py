@@ -16,7 +16,7 @@ import numpy as np
 import pandas as pd
 import torch
 from omegaconf import OmegaConf
-from scipy.stats import ks_2samp
+from scipy.stats import ks_2samp, spearmanr
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
@@ -34,8 +34,9 @@ FOCUS = ["CD45RA", "CD34", "CD62L", "CD14", "CD41", "HLA_DR"]
 
 def energy_distance(a: np.ndarray, b: np.ndarray, n: int = 5000, seed: int = 0) -> float:
     rng = np.random.default_rng(seed)
-    a = torch.as_tensor(a[rng.choice(len(a), min(n, len(a)), replace=False)], device="cuda")
-    b = torch.as_tensor(b[rng.choice(len(b), min(n, len(b)), replace=False)], device="cuda")
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    a = torch.as_tensor(a[rng.choice(len(a), min(n, len(a)), replace=False)], dtype=torch.float32, device=device)
+    b = torch.as_tensor(b[rng.choice(len(b), min(n, len(b)), replace=False)], dtype=torch.float32, device=device)
     return (2 * torch.cdist(a, b).mean() - torch.cdist(a, a).mean() - torch.cdist(b, b).mean()).item()
 
 
@@ -50,6 +51,15 @@ def predict(model, step_data, source_rows: np.ndarray, n_steps: int, n_samples: 
         with torch.no_grad():
             out.append(method.predict(data, generator=generator).X.detach().cpu().numpy())
     return np.concatenate(out)
+
+
+def shared_correlation(gen: np.ndarray, source: np.ndarray, markers, shared, src_idx) -> pd.Series:
+    """Per shared marker, Spearman correlation of each cell's generated value with its own measured source value.
+
+    1 means the cell's own value carries through (up to a monotone recalibration); 0 means the source is ignored.
+    """
+    return pd.Series({m: spearmanr(gen[:, markers.index(m)], source[:, src_idx[m]]).statistic for m in shared},
+                     name="spearman(gen, own source)")
 
 
 def plot(name: str, gen: np.ndarray, real: np.ndarray, old: np.ndarray, markers, shared, src_idx, path: Path) -> None:
@@ -104,7 +114,9 @@ def main() -> None:
           flush=True)
 
     ks_rows, summary = [], []
-    for name, (n_steps, n_samples) in SETTINGS.items():
+    names = sys.argv[4].split(",") if len(sys.argv) > 4 else list(SETTINGS)  # a subset of SETTINGS
+    for name in names:
+        n_steps, n_samples = SETTINGS[name]
         t0 = time.perf_counter()
         gen = predict(model, step_data, source_all[rows], n_steps, n_samples)
         secs = time.perf_counter() - t0
@@ -116,6 +128,10 @@ def main() -> None:
                         "mean_ks": float(np.mean([r["ks"] for r in ks_rows if r["setting"] == name])), "secs": secs})
         print(json.dumps(summary[-1]), flush=True)
         plot(name, gen, real, source_all[rows], markers, shared, src_idx, out / f"markers_{name.replace('@', '_')}.png")
+        if n_samples == 1:
+            corr = shared_correlation(gen, source_all[rows], markers, shared, src_idx)
+            corr.to_csv(out / f"shared_corr_{name.replace('@', '_')}.csv")
+            print(f"{name} spearman(gen, own source): mean {corr.mean():.3f}", corr.round(3).to_dict(), flush=True)
     for m in shared:
         ks_rows.append({"setting": "old (source)", "marker": m, "shared": True,
                         "ks": ks_2samp(source_all[rows][:, src_idx[m]], real[:, markers.index(m)]).statistic})

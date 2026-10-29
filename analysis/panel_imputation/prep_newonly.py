@@ -16,6 +16,8 @@ from pathlib import Path
 
 import anndata as ad
 import numpy as np
+import zarr
+from annbatch.io import write_sharded
 
 
 def quantile_match(x: np.ndarray, reference: np.ndarray, n_q: int = 1001) -> np.ndarray:
@@ -58,7 +60,8 @@ def main() -> None:
             slim.obsm["new_only"] = x[:, [list(new.var_names).index(m) for m in new_only]]
         slim.uns = {k: a.uns[k] for k in ("dataset",) if k in a.uns}
         name = "old_panel.zarr" if a is old else "new_panel.zarr"
-        slim.write_zarr(out / name)
+        # annbatch's writer: zarr v3, chunked by rows across the full width and sharded, the layout its loader reads
+        write_sharded(zarr.open_group(out / name, mode="w", zarr_format=3), slim)
         print(f"wrote {out / name}: obsm {list(slim.obsm)}, obs {list(slim.obs.columns)}, uns {list(slim.uns)}",
               flush=True)
     (out / "markers.json").write_text(json.dumps({"shared": shared, "new_only": new_only}, indent=1))

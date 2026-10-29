@@ -11,7 +11,7 @@ No cell is measured on both panels. The task is to give each old-panel cell its 
 panel's cells are split train / val / test (`split_42`, 70 / 10 / 20) and the old panel is the source.
 
 Scripts are in [`analysis/panel_imputation/`](../analysis/panel_imputation). Each one takes a finished flowrun run
-dir only to read its data config (`.hydra/config.yaml`).
+dir only to read its data config (`.hydra/config.yaml`). How to run them on the cluster: [running manual](../analysis/panel_imputation/README.md).
 
 ## 1. What the flow did wrong
 
@@ -38,6 +38,12 @@ Three separate problems:
    independent, so the flow learns $p(\text{target})$, not $p(\text{target}\mid\text{source})$. At
    $\varepsilon = 0.1$ it does better (0.30; CD45RA 0.77, CD34 0.66). At $\varepsilon = 0.05$ Sinkhorn
    diverges and falls back every step.
+
+Per-marker densities: real new-panel test cells (blue), generated (red), old-panel source (green).
+
+| small model, mean of 100 samples | small model, one sample | wide + src64, one sample |
+|---|---|---|
+| ![](figures/panel_imputation/flow_small_mean100.png) | ![](figures/panel_imputation/flow_small_sample.png) | ![](figures/panel_imputation/flow_wide_src64_sample.png) |
 
 ## 2. Why quantile matching on the shared markers
 
@@ -108,9 +114,10 @@ To impute an old cell: quantile-match its shared markers, keep them, and draw $n
 | 20 | 0.506 | 248k | 0.77 |
 | 24 | 0.511 | 247k | 0.75 |
 | **28** | **0.516** | **247k** | 0.73 |
-| 32 (1 seed) | 0.517 | 251k | 0.71 |
+| 32 | 0.518 | 250k | 0.71 |
+| 40 | 0.521 | 265k | 0.68 |
 
-R² levels off after about 24, and BIC is lowest at 24 to 28. K = 28 is also close to the 23 annotated new-panel
+R² keeps creeping up (+0.005 from 28 to 40) while BIC is lowest at 24 to 28 and rises after. K = 28 is also close to the 23 annotated new-panel
 cell types. Two components per marker would not be enough: the bimodality is per marker, but the populations live
 in 28-d. The tables below used K = 20, picked by BIC from {10, 20, 30, 40} before the sweep.
 
@@ -128,6 +135,10 @@ The top responsibility of about 0.75 means the shared markers mostly, but not fu
 | GMM unconditional (sample $p(x)$, ignore the cell) | 0.0019 | 0.024 | 0.023 |
 | flow, shared recalibrated + new-only generated | 0.0095 | 0.030 | 0.060 |
 | flow, all 28 generated (best, wide + src64, eps 1) | 0.009 | 0.048 | |
+
+| GMM conditional | GMM unconditional | flow, new-only generated |
+|---|---|---|
+| ![](figures/panel_imputation/gmm_conditional.png) | ![](figures/panel_imputation/gmm_unconditional.png) | ![](figures/panel_imputation/flow_newonly_sample.png) |
 
 The unconditional GMM shows that distribution metrics alone cannot tell a model that uses the cell from one that
 ignores it. That is why we also score per cell.
