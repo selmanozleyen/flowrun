@@ -5,9 +5,13 @@ loss-guided sampling of designs whose predicted cells match a target.
    ``obsm["design"]`` of the cells and into ``X`` of a one-row-per-design file, z-scores the markers, and writes
    a split that holds the target design out of both.
 2. ``flowrun-fit-cfm +experiment=labcompass_surrogate`` and ``+experiment=labcompass_prior`` train the two flows.
-3. ``flowrun-labcompass guide``: samples designs from the prior steered toward cells whose mean marker profile
-   matches the target design's (``sckitflow.core.surrogate.LossGuidedVelocity``) and reports them next to
-   unguided prior samples.
+3. ``flowrun-labcompass fit-classifier``: the readout ``h``, a differentiable cell-type classifier on the markers.
+4. ``flowrun-labcompass guide``: samples designs from the prior steered toward cells whose predicted cell-type
+   composition matches the target design's (``sckitflow.core.surrogate.LossGuidedVelocity``) and reports them
+   next to unguided prior samples.
+
+Everything is retrospective: the designs are scored by the trained surrogate against a held-out design of an
+existing screen, never carried out.
 """
 
 from __future__ import annotations
@@ -112,6 +116,87 @@ def prepare(adata_path: Path, out_dir: Path, *, target_prefix: str, n_val: int, 
     }
 
 
+def fit_classifier(data_dir: Path, *, hidden: int, epochs: int, lr: float, seed: int) -> dict:
+    """Trains the cell-type readout ``h`` on the training cells and writes ``classifier.pt`` to ``data_dir``.
+
+    The paper's readout maps a generated cell to its type; guidance needs it differentiable, so it is a small MLP
+    on the z-scored markers rather than the Leiden clustering it is trained against.
+    """
+    import torch
+
+    cells = ad.read_zarr(data_dir / "cells.zarr")
+    classes = sorted(cells.obs["cell_type"].astype(str).unique())
+    y_all = torch.as_tensor(pd.Index(classes).get_indexer(cells.obs["cell_type"].astype(str)))
+    X_all = torch.as_tensor(np.asarray(cells.X, dtype=np.float32))
+    is_train = (cells.obs["split"] == "train").to_numpy()
+
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    torch.manual_seed(seed)
+    model = _classifier_module(cells.n_vars, len(classes), hidden).to(device)
+    opt = torch.optim.Adam(model.parameters(), lr=lr)
+    X, y = X_all[is_train].to(device), y_all[is_train].to(device)
+    Xv, yv = X_all[~is_train].to(device), y_all[~is_train].to(device)
+    generator = torch.Generator(device=device).manual_seed(seed)
+    for epoch in range(epochs):
+        perm = torch.randperm(len(X), device=device, generator=generator)
+        for i in range(0, len(X), 4096):
+            idx = perm[i : i + 4096]
+            loss = torch.nn.functional.cross_entropy(model(X[idx]), y[idx])
+            opt.zero_grad()
+            loss.backward()
+            opt.step()
+    model.eval()
+    with torch.no_grad():
+        acc = {
+            "train_accuracy": float((model(X).argmax(-1) == y).float().mean()),
+            "heldout_accuracy": float((model(Xv).argmax(-1) == yv).float().mean()),
+        }
+    torch.save({"state_dict": model.state_dict(), "classes": classes, "hidden": hidden}, data_dir / "classifier.pt")
+    return {"n_classes": len(classes), "epochs": epochs, **acc}
+
+
+def _classifier_module(n_markers: int, n_classes: int, hidden: int):
+    import torch
+
+    return torch.nn.Sequential(
+        torch.nn.Linear(n_markers, hidden),
+        torch.nn.SiLU(),
+        torch.nn.Linear(hidden, hidden),
+        torch.nn.SiLU(),
+        torch.nn.Linear(hidden, n_classes),
+    )
+
+
+def load_classifier(data_dir: Path, device: str):
+    """The trained readout and its class names."""
+    import torch
+
+    state = torch.load(data_dir / "classifier.pt", map_location=device, weights_only=True)
+    model = _classifier_module(state["state_dict"]["0.weight"].shape[1], len(state["classes"]), state["hidden"])
+    model.load_state_dict(state["state_dict"])
+    return model.to(device).eval().requires_grad_(False), state["classes"]
+
+
+def classifier_readout(pred_data, classifier):
+    """The mean predicted cell-type composition per condition: the paper's ``ȳ(x)``, shape ``(N, n_classes)``.
+
+    Averages the probabilities over the generated cells, so the nonlinear potential sees the composition rather
+    than the composition of a mean cell.
+    """
+    import torch
+
+    samples = pred_data.raw_samples
+    probs = torch.softmax(classifier(samples), dim=-1)
+    return probs.reshape(-1, *probs.shape[-2:]).mean(0)
+
+
+def cross_entropy(y, ystar):
+    """``-Σ y* log ȳ``: the paper's potential, ``-log ȳ_k*`` for a one-hot target."""
+    import torch
+
+    return -(ystar * torch.log(y.clamp_min(torch.finfo(y.dtype).tiny))).sum(-1)
+
+
 def decode(encoded: np.ndarray, encoding: dict) -> pd.DataFrame:
     """Maps encoded designs back to doses (negative doses are clipped to 0)."""
     x = encoded * np.asarray(encoding["std"]) + np.asarray(encoding["mean"])
@@ -131,9 +216,12 @@ def guide(
     max_strength: float,
     n_context: int,
     surrogate_steps: int,
+    readout: str,
     seed: int,
 ) -> dict:
     """Samples guided and unguided designs and writes ``designs.csv`` and ``summary.json`` to ``out_dir``."""
+    from functools import partial
+
     import torch
     from sckitflow import Model
     from sckitflow.core.solvers import ODESolver
@@ -158,17 +246,28 @@ def guide(
     inferer.config = inferer.config.model_copy(update={"n_steps": surrogate_steps})
 
     # The potential reads its context (one leaf, n_context cells) from training cells; only their count matters
-    # when generating from noise. The target is the held-out design's mean marker profile.
+    # when generating from noise. The target is the held-out design's own readout.
     rng = np.random.default_rng(seed)
     context = cells[rng.choice(np.flatnonzero(cells.obs["split"] == "train"), n_context, replace=False)].copy()
-    ystar = torch.as_tensor(cells.X[(cells.obs["design_id"] == target).to_numpy()].mean(0), device=device)
+    is_target = (cells.obs["design_id"] == target).to_numpy()
+    if readout == "classifier":
+        classifier, classes = load_classifier(data_dir, device)
+        # ``ȳ*``: the target design's observed composition, from the cell types the classifier was trained on.
+        counts = cells.obs.loc[is_target, "cell_type"].astype(str).value_counts()
+        ystar = torch.as_tensor(
+            (counts.reindex(classes).fillna(0) / is_target.sum()).to_numpy(), dtype=torch.float32, device=device
+        )
+        readout_fn, potential_fn = partial(classifier_readout, classifier=classifier), cross_entropy
+    else:
+        ystar = torch.as_tensor(cells.X[is_target].mean(0), device=device)
+        readout_fn, potential_fn = MeanSamplesReadoutConfig().build(), SquaredErrorPotentialConfig().build()
     potential = SurrogatePotential(
         inferer=inferer,
         ystar=ystar,
         datamodule=FlowDataModule.from_adata(context, surrogate.manager, n_train_steps=1, batch_size=n_context),
         adata=context,
-        readout=MeanSamplesReadoutConfig().build(),
-        potential=SquaredErrorPotentialConfig().build(),
+        readout=readout_fn,
+        potential=potential_fn,
         require_target_state=False,
         seed=seed,
     ).to(device)
@@ -186,18 +285,46 @@ def guide(
 
     target_x = torch.as_tensor(designs[target].X[0], device=device)
     train_x = torch.as_tensor(designs[designs.obs["split"] == "train"].X, device=device)
-    rows, summary = [], {"target_design": int(target), "scale": scale, "n_designs": n_designs}
+    rows, summary = [], {"target_design": int(target), "scale": scale, "n_designs": n_designs, "readout": readout}
+    # For the classifier readout: the predicted mass on the target's dominant type, the paper's headline number.
+    top = int(ystar.argmax()) if readout == "classifier" else None
+    if top is not None:
+        summary["target_type"] = classes[top]
+        summary["target_type_observed_fraction"] = float(ystar[top])
+
+    # The same surrogate read with the target class picked out instead of scored, so the reported fraction and the
+    # guided potential come from one forward model.
+    fraction_of = (
+        None
+        if top is None
+        else SurrogatePotential(
+            inferer=inferer,
+            ystar=ystar,
+            datamodule=FlowDataModule.from_adata(context, surrogate.manager, n_train_steps=1, batch_size=n_context),
+            adata=context,
+            readout=readout_fn,
+            potential=lambda y, _: y[..., top],
+            require_target_state=False,
+            seed=seed,
+        ).to(device)
+    )
+
+    def achieved(x: torch.Tensor) -> float | None:
+        return None if fraction_of is None else float(fraction_of({DESIGN_KEY: x}).mean())
+
     with torch.no_grad():
         summary["target_potential"] = float(psi(target_x[None])[0])
         summary["train_potential_min"] = float(psi(train_x).min())
     for name, x in samples.items():
         with torch.no_grad():
             pot = psi(x)
+            frac = achieved(x)
         dist = torch.linalg.vector_norm(x - target_x, dim=-1)
         nearest = torch.cdist(x, train_x).min(-1).values
         summary[name] = {
             "potential_mean": float(pot.mean()),
             "potential_min": float(pot.min()),
+            "predicted_target_type_fraction": frac,
             "dist_to_target_mean": float(dist.mean()),
             "dist_to_target_min": float(dist.min()),
             "dist_to_nearest_train_mean": float(nearest.mean()),
@@ -223,6 +350,12 @@ def main() -> None:
     p.add_argument("--target-prefix", default="MgK", help="cell types whose fraction picks the target design")
     p.add_argument("--n-val", type=int, default=5)
     p.add_argument("--seed", type=int, default=0)
+    c = sub.add_parser("fit-classifier", help="train the cell-type readout on the prepared cells")
+    c.add_argument("data_dir", type=Path)
+    c.add_argument("--hidden", type=int, default=128)
+    c.add_argument("--epochs", type=int, default=10)
+    c.add_argument("--lr", type=float, default=1e-3)
+    c.add_argument("--seed", type=int, default=0)
     g = sub.add_parser("guide", help="sample guided and prior designs")
     g.add_argument("data_dir", type=Path)
     g.add_argument("surrogate_dir", type=Path)
@@ -234,11 +367,20 @@ def main() -> None:
     g.add_argument("--max-strength", type=float, default=10.0)
     g.add_argument("--n-context", type=int, default=256, help="cells generated per design by the surrogate")
     g.add_argument("--surrogate-steps", type=int, default=20, help="ODE steps of the surrogate inside guidance")
+    g.add_argument(
+        "--readout",
+        choices=("classifier", "markers"),
+        default="classifier",
+        help="classifier: cell-type composition against the target's, scored by cross-entropy (the paper's "
+        "potential, needs `fit-classifier`); markers: mean marker profile, squared error",
+    )
     g.add_argument("--seed", type=int, default=0)
     args = vars(parser.parse_args())
     command = args.pop("command")
     if command == "prepare":
         result = prepare(args.pop("adata"), args.pop("out_dir"), **args)
+    elif command == "fit-classifier":
+        result = fit_classifier(args.pop("data_dir"), **args)
     else:
         result = guide(
             args.pop("data_dir"), args.pop("surrogate_dir"), args.pop("prior_dir"), args.pop("out_dir"), **args
