@@ -25,6 +25,7 @@ import numpy as np
 import pandas as pd
 
 DESIGN_KEY = "design"
+UNASSIGNED = "unassigned"  # cells the screen left without a type: a class of its own, so ȳ(x) still sums to 1
 DOSES = [
     "gm-csf_[ng_ml]",
     "tpo_[ng_ml]",
@@ -60,7 +61,7 @@ def prepare(adata_path: Path, out_dir: Path, *, target_prefix: str, n_val: int, 
     mean, std = encoded.mean(0), encoded.std(0) + 1e-8
     encoded = ((encoded - mean) / std).astype(np.float32)
 
-    cell_type = obs["cell_type"].astype(str).to_numpy()
+    cell_type = obs["cell_type"].astype(str).fillna(UNASSIGNED).to_numpy()
     fraction = pd.Series(cell_type).str.startswith(target_prefix).groupby(design_id).mean()
     target = int(fraction.idxmax())
     rng = np.random.default_rng(seed)
@@ -125,8 +126,9 @@ def fit_classifier(data_dir: Path, *, hidden: int, epochs: int, lr: float, seed:
     import torch
 
     cells = ad.read_zarr(data_dir / "cells.zarr")
-    classes = sorted(cells.obs["cell_type"].astype(str).unique())
-    y_all = torch.as_tensor(pd.Index(classes).get_indexer(cells.obs["cell_type"].astype(str)))
+    labels = cells.obs["cell_type"].astype(str).fillna(UNASSIGNED)
+    classes = sorted(labels.unique())
+    y_all = torch.as_tensor(pd.Index(classes).get_indexer(labels))
     X_all = torch.as_tensor(np.asarray(cells.X, dtype=np.float32))
     is_train = (cells.obs["split"] == "train").to_numpy()
 
@@ -253,7 +255,7 @@ def guide(
     if readout == "classifier":
         classifier, classes = load_classifier(data_dir, device)
         # ``ȳ*``: the target design's observed composition, from the cell types the classifier was trained on.
-        counts = cells.obs.loc[is_target, "cell_type"].astype(str).value_counts()
+        counts = cells.obs.loc[is_target, "cell_type"].astype(str).fillna(UNASSIGNED).value_counts()
         ystar = torch.as_tensor(
             (counts.reindex(classes).fillna(0) / is_target.sum()).to_numpy(), dtype=torch.float32, device=device
         )
