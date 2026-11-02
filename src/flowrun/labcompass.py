@@ -49,7 +49,7 @@ def prepare(adata_path: Path, out_dir: Path, *, target_prefix: str, n_val: int, 
     encoded = ((encoded - mean) / std).astype(np.float32)
 
     cell_type = obs["cell_type"].astype(str).to_numpy()
-    fraction = pd.Series(np.char.startswith(cell_type, target_prefix)).groupby(design_id).mean()
+    fraction = pd.Series(cell_type).str.startswith(target_prefix).groupby(design_id).mean()
     target = int(fraction.idxmax())
     rng = np.random.default_rng(seed)
     val = rng.choice(np.setdiff1d(designs.index, [target]), size=n_val, replace=False)
