@@ -36,6 +36,14 @@ DOSES = [
 LINEAR = ["o2_[%]", "days_of_culture"]
 
 
+def _write(adata: ad.AnnData, path: Path) -> None:
+    """Writes ``adata`` in the row-chunked sharded layout annbatch streams."""
+    import zarr
+    from annbatch import write_sharded
+
+    write_sharded(zarr.open_group(path, mode="w", zarr_format=3), adata)
+
+
 def prepare(adata_path: Path, out_dir: Path, *, target_prefix: str, n_val: int, seed: int) -> dict:
     """Writes ``cells.zarr`` and ``designs.zarr`` to ``out_dir`` and returns the encoding summary."""
     adata = ad.read_h5ad(adata_path, backed="r")
@@ -84,15 +92,16 @@ def prepare(adata_path: Path, out_dir: Path, *, target_prefix: str, n_val: int, 
         obsm={DESIGN_KEY: encoded[design_id]},
         uns={"design_encoding": json.dumps(encoding)},
     )
-    cells.write_zarr(out_dir / "cells.zarr")
+    _write(cells, out_dir / "cells.zarr")
     design_obs = designs.rename(columns=str).assign(target_fraction=fraction, split=pd.Categorical(split.to_numpy()))
     design_obs.index = design_obs.index.astype(str)
-    ad.AnnData(
+    designs_adata = ad.AnnData(
         X=encoded,
         obs=design_obs,
         var=pd.DataFrame(index=[f"enc_{c}" for c in DOSES + LINEAR]),
         uns={"design_encoding": json.dumps(encoding)},
-    ).write_zarr(out_dir / "designs.zarr")
+    )
+    _write(designs_adata, out_dir / "designs.zarr")
     return {
         "n_cells": cells.n_obs,
         "n_designs": len(designs),
