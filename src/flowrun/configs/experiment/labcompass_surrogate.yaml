@@ -1,0 +1,40 @@
+# @package _global_
+# LabCompass forward surrogate: cells (z-scored markers in X) generated from noise given the encoded design.
+# Data and split come from `flowrun-labcompass prepare`:
+#   flowrun-fit-cfm +experiment=labcompass_surrogate paths.target_adata=<out>/cells.zarr paths.out_dir=runs/surrogate
+splitter:
+  source_key: null
+  group_keys: []
+
+datamanager:
+  target_sample_rep: null
+  continuous_conditions: [design]
+
+probability_path:
+  type: paths.two_sided.linear
+  sigma: 0.0
+
+training:
+  generate_from_noise: true
+
+inference:
+  generate_from_noise: true
+  n_steps: 20
+
+module:
+  condition_encoder:
+    output_dim: 128
+    continuous_input_layers:
+      design: {output_dim: 128, mlp: {hidden_dims: [256, 256]}}
+    pooling: {type: nn.pooling.mean}
+
+datamodule:
+  batch_size: 1024
+  n_train_steps: 1000
+
+trainer:
+  max_epochs: 20
+
+callbacks:
+  grad_accumulation:
+    scheduling: {0: 1}

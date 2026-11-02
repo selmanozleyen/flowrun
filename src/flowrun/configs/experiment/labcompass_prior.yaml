@@ -1,0 +1,36 @@
+# @package _global_
+# LabCompass design prior: an unconditional flow over the encoded designs (one row per design in X).
+#   flowrun-fit-cfm +experiment=labcompass_prior paths.target_adata=<out>/designs.zarr paths.out_dir=runs/prior
+splitter:
+  source_key: null
+  group_keys: []
+
+datamanager:
+  target_sample_rep: null
+
+probability_path:
+  type: paths.two_sided.linear
+  sigma: 0.0
+
+training:
+  generate_from_noise: true
+
+inference:
+  generate_from_noise: true
+  n_steps: 50
+  n_samples: 256
+
+module:
+  state_encoder: {output_dim: 128, mlp: {hidden_dims: [256, 256]}}
+  field_decoder: {hidden_dims: [256, 256]}
+
+datamodule:
+  batch_size: 64
+  n_train_steps: 500
+
+trainer:
+  max_epochs: 10
+
+callbacks:
+  grad_accumulation:
+    scheduling: {0: 1}

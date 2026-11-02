@@ -51,7 +51,8 @@ training:
   generate_from_noise: true
 
 probability_path:
-  name: linear_dirac
+  type: paths.two_sided.linear
+  sigma: 0.0
 
 coupling:
   method: fused

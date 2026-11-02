@@ -40,8 +40,7 @@ Key concepts
 - **Conditional Flow Matching (CFM)**: learns a velocity field v(x, t | c) that
   transports a source distribution to a target distribution conditioned on c.
 - **Probability path**: defines the interpolation between source and target
-  samples. Supported: ``linear_dirac``, ``linear_gaussian``,
-  ``schrodinger_bridge``, ``variance_preserving``. See
+  samples, named by its registry type (``paths.two_sided.linear``, ``paths.one_sided.vp``, ...). See
   ``sckitflow.core.probability_paths``.
 - **Velocity field**: the network that predicts the time derivative along the
   path. Here an MLP with separate state/time/condition encoders.
@@ -119,12 +118,7 @@ from sckitflow.core.coupling import (
 from sckitflow.core.methods import CFMTrainingConfig, MatchedTrainingConfig, ODEInferenceConfig
 from sckitflow.core.metrics import EnergyDistance, MaximumMeanDiscrepancy
 from sckitflow.core.nn import NeuralVelocityConfig
-from sckitflow.core.probability_paths import (
-    LinearDiracProbabilityPathConfig,
-    LinearGaussianProbabilityPathConfig,
-    SchrodingerBridgeProbabilityPathConfig,
-    VariancePreservingDiracProbabilityPathConfig,
-)
+from sckitflow.core.probability_paths import PathConfig
 from sckitflow.data import DataManagerConfig, FlowDataModule
 from sckitflow.trainer import TrainingPlan
 
@@ -374,18 +368,11 @@ def main(config: DictConfig) -> float:
 
     # Initialize probability path
     logger.info("Initializing probability path.")
-    if config.probability_path.name == "linear_dirac":
-        probability_path_cfg = LinearDiracProbabilityPathConfig(sigma=config.probability_path.sigma)
-    elif config.probability_path.name == "linear_gaussian":
-        probability_path_cfg = LinearGaussianProbabilityPathConfig(sigma=config.probability_path.sigma)
-    elif config.probability_path.name == "schrodinger_bridge":
-        probability_path_cfg = SchrodingerBridgeProbabilityPathConfig(
-            sigma=config.probability_path.sigma, eps=config.probability_path.eps
-        )
-    elif config.probability_path.name == "variance_preserving":
-        probability_path_cfg = VariancePreservingDiracProbabilityPathConfig(sigma=config.probability_path.sigma)
-    else:
-        raise ValueError(f"Invalid probability path name {config.probability_path.name}.")
+    # A registry spec (`paths.two_sided.linear`, `paths.one_sided.vp`, ...); a noisy path gets the Gaussian sampler.
+    path_spec = OmegaConf.to_container(config.probability_path, resolve=True)
+    if path_spec.get("sigma", 0) > 0:
+        path_spec.setdefault("sampler_cfg", {"type": "noise_sampler.isotropic_gaussian"})
+    probability_path_cfg = PathConfig.from_spec(path_spec)
 
     # Initialize time sampler
     logger.info("Initializing time sampler.")

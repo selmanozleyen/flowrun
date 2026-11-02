@@ -694,16 +694,16 @@ class TestFitCFMRunsAxes:
             pytest.param(
                 combine(
                     pair="one_cat_paired",
-                    probability_path=["probability_path.name=linear_dirac"],
+                    probability_path=["probability_path.sigma=0.0"],
                 ),
-                id="linear-dirac",
+                id="noiseless",
             ),
             pytest.param(
                 combine(
                     pair="one_cat_paired",
-                    probability_path=["probability_path.name=schrodinger_bridge"],
+                    probability_path=["probability_path.type=paths.one_sided.vp", "probability_path.sigma=1.0"],
                 ),
-                id="schrodinger-bridge",
+                id="one-sided-vp",
             ),
         ],
     )

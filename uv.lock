@@ -1115,9 +1115,9 @@ requires-dist = [
     { name = "pytest-xdist", marker = "extra == 'test'", specifier = ">=3" },
     { name = "scanpy", specifier = ">=1.10" },
     { name = "scikit-learn" },
-    { name = "sckitflow", extras = ["cupy-cuda12"], marker = "extra == 'cu126'", git = "https://github.com/theislab/sckitflow?branch=main" },
-    { name = "sckitflow", extras = ["cupy-cuda13"], marker = "extra == 'cu130'", git = "https://github.com/theislab/sckitflow?branch=main" },
-    { name = "sckitflow", extras = ["torch"], git = "https://github.com/theislab/sckitflow?branch=main" },
+    { name = "sckitflow", extras = ["cupy-cuda12"], marker = "extra == 'cu126'", git = "https://github.com/selmanozleyen/sckitflow?branch=feat%2Floss-guidance" },
+    { name = "sckitflow", extras = ["cupy-cuda13"], marker = "extra == 'cu130'", git = "https://github.com/selmanozleyen/sckitflow?branch=feat%2Floss-guidance" },
+    { name = "sckitflow", extras = ["torch"], git = "https://github.com/selmanozleyen/sckitflow?branch=feat%2Floss-guidance" },
     { name = "torch" },
     { name = "torch", marker = "extra == 'cpu'", index = "https://download.pytorch.org/whl/cpu", conflict = { package = "flowrun", extra = "cpu" } },
     { name = "torch", marker = "extra == 'cu126'", index = "https://download.pytorch.org/whl/cu126", conflict = { package = "flowrun", extra = "cu126" } },
@@ -4130,8 +4130,8 @@ wheels = [
 
 [[package]]
 name = "sckitflow"
-version = "0.1.dev1014+gb46dd1f7b"
-source = { git = "https://github.com/theislab/sckitflow?branch=main#b46dd1f7b657ad8a11db6646c7b3103615f63e80" }
+version = "0.1.dev1018+g4e1096386"
+source = { git = "https://github.com/selmanozleyen/sckitflow?branch=feat%2Floss-guidance#4e109638685894ce47c1dd936af1399d0d67975e" }
 dependencies = [
     { name = "anndata" },
     { name = "lightning" },

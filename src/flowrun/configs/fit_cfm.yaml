@@ -32,17 +32,14 @@ paths:
   out_dir: ./runs/${now:%Y-%m-%d_%H-%M-%S}   # the run's outputs: save/, checkpoints/, logs/, hydra/
 
 # -----------------------------------------------------------------------------
-# Probability path (`get_probability_path_cfg`)
+# Probability path: a `sckitflow.core.probability_paths` registry spec.
 #
-# `name` must be one of:
-#   linear_dirac | linear_gaussian | schrodinger_bridge | variance_preserving
-# `eps` is only consumed by `schrodinger_bridge`, but the key is read
-# unconditionally, so keep it present.
+# `type`: paths.two_sided.{linear,trig,enc_dec} | paths.one_sided.{linear,trig,vp}
+# `sigma > 0` adds noise (Gaussian sampler); one-sided paths need it.
 # -----------------------------------------------------------------------------
 probability_path:
-  name: "linear_gaussian"
+  type: "paths.two_sided.linear"
   sigma: 0.1
-  eps: 0.01
 
 # -----------------------------------------------------------------------------
 # Samplers (`get_time_sampler_cfg` / `get_noise_sampler_cfg`)

@@ -52,8 +52,8 @@ coupling:
 training:
   generate_from_noise: false        # the flow starts from the matched control cells
 
-probability_path:                   # CellFlow's default: constant noise 0
-  name: linear_dirac
+probability_path:                   # CellFlow's default: no noise
+  type: paths.two_sided.linear
   sigma: 0.0
 
 inference:

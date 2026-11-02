@@ -44,12 +44,13 @@ optional-dependencies.test = [
   "pytest-xdist>=3",
 ]
 scripts.flowrun-fit-cfm = "flowrun.fit_cfm:main"
+scripts.flowrun-labcompass = "flowrun.labcompass:main"
 
 [tool.hatch]
 build.targets.wheel.packages = [ "src/flowrun" ]
 
 [tool.uv]
-sources.sckitflow = { git = "https://github.com/theislab/sckitflow", branch = "main" }
+sources.sckitflow = { git = "https://github.com/selmanozleyen/sckitflow", branch = "feat/loss-guidance" }
 conflicts = [ [ { extra = "cpu" }, { extra = "cu126" }, { extra = "cu130" } ] ]
 sources.torch = [
   { index = "pytorch-cpu", extra = "cpu" },
