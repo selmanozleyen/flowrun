@@ -179,24 +179,11 @@ def load_classifier(data_dir: Path, device: str):
     return model.to(device).eval().requires_grad_(False), state["classes"]
 
 
-def classifier_readout(pred_data, classifier):
-    """The mean predicted cell-type composition per condition: the paper's ``ȳ(x)``, shape ``(N, n_classes)``.
-
-    Averages the probabilities over the generated cells, so the nonlinear potential sees the composition rather
-    than the composition of a mean cell.
-    """
+def classifier_readout(cells, classifier):
+    """The paper's readout ``h``: each generated cell's cell-type probabilities."""
     import torch
 
-    samples = pred_data.raw_samples
-    probs = torch.softmax(classifier(samples), dim=-1)
-    return probs.reshape(-1, *probs.shape[-2:]).mean(0)
-
-
-def cross_entropy(y, ystar):
-    """``-Σ y* log ȳ``: the paper's potential, ``-log ȳ_k*`` for a one-hot target."""
-    import torch
-
-    return -(ystar * torch.log(y.clamp_min(torch.finfo(y.dtype).tiny))).sum(-1)
+    return torch.softmax(classifier(cells), dim=-1)
 
 
 def decode(encoded: np.ndarray, encoding: dict) -> pd.DataFrame:
@@ -229,9 +216,10 @@ def guide(
     from sckitflow.core.solvers import ODESolver
     from sckitflow.core.surrogate import (
         LossGuidedVelocity,
-        MeanSamplesReadoutConfig,
-        SquaredErrorPotentialConfig,
         SurrogatePotential,
+        SurrogateResponse,
+        cross_entropy,
+        squared_error,
     )
     from sckitflow.data import FlowDataModule
 
@@ -248,7 +236,7 @@ def guide(
     inferer.config = inferer.config.model_copy(update={"n_steps": surrogate_steps})
 
     # The potential reads its context (one leaf, n_context cells) from training cells; only their count matters
-    # when generating from noise. The target is the held-out design's own readout.
+    # when generating from noise. The target is the held-out design's own response.
     rng = np.random.default_rng(seed)
     context = cells[rng.choice(np.flatnonzero(cells.obs["split"] == "train"), n_context, replace=False)].copy()
     is_target = (cells.obs["design_id"] == target).to_numpy()
@@ -262,17 +250,16 @@ def guide(
         readout_fn, potential_fn = partial(classifier_readout, classifier=classifier), cross_entropy
     else:
         ystar = torch.as_tensor(cells.X[is_target].mean(0), device=device)
-        readout_fn, potential_fn = MeanSamplesReadoutConfig().build(), SquaredErrorPotentialConfig().build()
-    potential = SurrogatePotential(
+        readout_fn, potential_fn = None, squared_error
+    response = SurrogateResponse(
         inferer=inferer,
-        ystar=ystar,
         datamodule=FlowDataModule.from_adata(context, surrogate.manager, n_train_steps=1, batch_size=n_context),
         adata=context,
         readout=readout_fn,
-        potential=potential_fn,
         require_target_state=False,
         seed=seed,
-    ).to(device)
+    )
+    potential = SurrogatePotential(response, ystar=ystar, potential=potential_fn).to(device)
 
     def psi(x: torch.Tensor) -> torch.Tensor:
         return potential({DESIGN_KEY: x})
@@ -294,25 +281,9 @@ def guide(
         summary["target_type"] = classes[top]
         summary["target_type_observed_fraction"] = float(ystar[top])
 
-    # The same surrogate read with the target class picked out instead of scored, so the reported fraction and the
-    # guided potential come from one forward model.
-    fraction_of = (
-        None
-        if top is None
-        else SurrogatePotential(
-            inferer=inferer,
-            ystar=ystar,
-            datamodule=FlowDataModule.from_adata(context, surrogate.manager, n_train_steps=1, batch_size=n_context),
-            adata=context,
-            readout=readout_fn,
-            potential=lambda y, _: y[..., top],
-            require_target_state=False,
-            seed=seed,
-        ).to(device)
-    )
-
     def achieved(x: torch.Tensor) -> float | None:
-        return None if fraction_of is None else float(fraction_of({DESIGN_KEY: x}).mean())
+        """The predicted fraction of the target type, averaged over the designs."""
+        return None if top is None else float(response({DESIGN_KEY: x})[..., top].mean())
 
     with torch.no_grad():
         summary["target_potential"] = float(psi(target_x[None])[0])
