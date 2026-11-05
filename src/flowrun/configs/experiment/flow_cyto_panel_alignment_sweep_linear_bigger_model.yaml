@@ -1,0 +1,37 @@
+# @package _global_
+# flow_cyto_panel_alignment sweep with linear entropic OT (Sinkhorn) on the shared markers only, the baseline for the fused
+# sweep: 30 random draws over split seed x reg x scale_cost (30 cells).
+#   flowrun-fit-cfm -m +experiment=flow_cyto_panel_alignment_sweep_linear
+defaults:
+  - flow_cyto_panel_alignment_sweep
+
+sweep_name: flow_cyto_panel_alignment_sweep_linear
+
+datamanager:
+  quad_from_state: false
+
+coupling:
+  method: sinkhorn
+  num_iter_max: 1000
+
+hydra:
+  sweeper:
+    params:
+      coupling.reg: choice(0.05, 0.1, 0.5)
+      coupling.scale_cost: choice(mean, median)
+
+module:
+  time_features_id: ott-jax
+  num_time_features: 256
+  state_encoder_output_dim: 64
+  time_encoder_output_dim: 32
+  state_encoder_mlp_kwargs: {hidden_dims: [256, 256], activation_cls: silu}
+  time_encoder_mlp_kwargs: {hidden_dims: [128], activation_cls: silu}
+  vf_decoder_mlp_kwargs: {hidden_dims: [512, 512], activation_cls: silu}
+  conditioning_id: resnet1d
+  condition_encoder_output_dim: 32
+  condition_encoder_pooling_mode: mean
+  condition_encoder_pooling_proj_dim: 32
+  condition_encoder_output_layers_kwargs: {hidden_dims: [32], activation_cls: silu}
+  source_encoder_mlp_kwargs: {hidden_dims: [128, 128], activation_cls: silu}   # fused GW: the flow reads the source
+  source_encoder_output_dim: 64

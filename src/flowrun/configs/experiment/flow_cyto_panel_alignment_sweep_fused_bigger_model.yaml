@@ -1,0 +1,32 @@
+# @package _global_
+# flow_cyto_panel_alignment sweep with fused Gromov-Wasserstein matching (the experiment's default coupling): 30 random draws over
+# split seed x epsilon x alpha x scale_cost (90 cells).
+#   flowrun-fit-cfm -m +experiment=flow_cyto_panel_alignment_sweep_fused
+defaults:
+  - flow_cyto_panel_alignment_sweep
+
+sweep_name: flow_cyto_panel_alignment_sweep_fused
+
+hydra:
+  sweeper:
+    params:
+      coupling.epsilon: choice(0.5, 1.0, 2.0)
+      coupling.alpha: choice(0.25, 0.5, 0.75)
+      coupling.scale_cost: choice(mean, median)
+
+
+module:
+  time_features_id: ott-jax
+  num_time_features: 256
+  state_encoder_output_dim: 64
+  time_encoder_output_dim: 32
+  state_encoder_mlp_kwargs: {hidden_dims: [256, 256], activation_cls: silu}
+  time_encoder_mlp_kwargs: {hidden_dims: [128], activation_cls: silu}
+  vf_decoder_mlp_kwargs: {hidden_dims: [512, 512], activation_cls: silu}
+  conditioning_id: resnet1d
+  condition_encoder_output_dim: 32
+  condition_encoder_pooling_mode: mean
+  condition_encoder_pooling_proj_dim: 32
+  condition_encoder_output_layers_kwargs: {hidden_dims: [32], activation_cls: silu}
+  source_encoder_mlp_kwargs: {hidden_dims: [128, 128], activation_cls: silu}   # fused GW: the flow reads the source
+  source_encoder_output_dim: 64
