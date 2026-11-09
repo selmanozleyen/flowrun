@@ -4130,8 +4130,8 @@ wheels = [
 
 [[package]]
 name = "sckitflow"
-version = "0.1.dev1022+g2130b1a92"
-source = { git = "https://github.com/selmanozleyen/sckitflow?branch=feat%2Floss-guidance#2130b1a92fdccad3a5851991c06611b9c71e91bb" }
+version = "0.1.dev1023+gb5e3d1c40"
+source = { git = "https://github.com/selmanozleyen/sckitflow?branch=feat%2Floss-guidance#b5e3d1c406cc0db665c6d8ecfdfb1e440fcf86fe" }
 dependencies = [
     { name = "anndata" },
     { name = "lightning" },
