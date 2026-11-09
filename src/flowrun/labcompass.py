@@ -215,6 +215,7 @@ def guide(
     from sckitflow import Model
     from sckitflow.core.solvers import ODESolver
     from sckitflow.core.surrogate import (
+        EulerFlowMap,
         LossGuidedVelocity,
         SurrogatePotential,
         SurrogateResponse,
@@ -269,7 +270,9 @@ def guide(
     time = torch.linspace(0, 1, n_steps, device=device)
     samples = {}
     for name, s in (("prior", 0.0), ("guided", scale)):
-        field = LossGuidedVelocity(prior.module, path, psi, scale=s, max_strength=max_strength)
+        field = LossGuidedVelocity(
+            prior.module, path, psi, flow_map=EulerFlowMap(prior.module), scale=s, max_strength=max_strength
+        )
         samples[name] = ODESolver(field, device_id=device).solve(x0, time).detach()
 
     target_x = torch.as_tensor(designs[target].X[0], device=device)
