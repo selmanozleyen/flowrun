@@ -215,8 +215,8 @@ def guide(
     from sckitflow import Model
     from sckitflow.core.solvers import ODESolver
     from sckitflow.core.surrogate import (
-        EulerFlowMap,
         LossGuidedVelocity,
+        PathFlowMap,
         SurrogatePotential,
         SurrogateResponse,
         cross_entropy,
@@ -271,7 +271,7 @@ def guide(
     samples = {}
     for name, s in (("prior", 0.0), ("guided", scale)):
         field = LossGuidedVelocity(
-            prior.module, path, psi, flow_map=EulerFlowMap(prior.module), scale=s, max_strength=max_strength
+            prior.module, path, psi, flow_map=PathFlowMap(prior.module, path), scale=s, max_strength=max_strength
         )
         samples[name] = ODESolver(field, device_id=device).solve(x0, time).detach()
 
