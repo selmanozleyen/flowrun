@@ -61,7 +61,7 @@ def prepare(adata_path: Path, out_dir: Path, *, target_prefix: str, n_val: int, 
     mean, std = encoded.mean(0), encoded.std(0) + 1e-8
     encoded = ((encoded - mean) / std).astype(np.float32)
 
-    cell_type = obs["cell_type"].astype(str).fillna(UNASSIGNED).to_numpy()
+    cell_type = obs["cell_type"].astype(object).fillna(UNASSIGNED).astype(str).to_numpy()
     fraction = pd.Series(cell_type).str.startswith(target_prefix).groupby(design_id).mean()
     target = int(fraction.idxmax())
     rng = np.random.default_rng(seed)
@@ -126,7 +126,7 @@ def fit_classifier(data_dir: Path, *, hidden: int, epochs: int, lr: float, seed:
     import torch
 
     cells = ad.read_zarr(data_dir / "cells.zarr")
-    labels = cells.obs["cell_type"].astype(str).fillna(UNASSIGNED)
+    labels = cells.obs["cell_type"].astype(object).fillna(UNASSIGNED).astype(str)
     classes = sorted(labels.unique())
     y_all = torch.as_tensor(pd.Index(classes).get_indexer(labels))
     X_all = torch.as_tensor(np.asarray(cells.X, dtype=np.float32))
@@ -139,7 +139,7 @@ def fit_classifier(data_dir: Path, *, hidden: int, epochs: int, lr: float, seed:
     X, y = X_all[is_train].to(device), y_all[is_train].to(device)
     Xv, yv = X_all[~is_train].to(device), y_all[~is_train].to(device)
     generator = torch.Generator(device=device).manual_seed(seed)
-    for epoch in range(epochs):
+    for _ in range(epochs):
         perm = torch.randperm(len(X), device=device, generator=generator)
         for i in range(0, len(X), 4096):
             idx = perm[i : i + 4096]
@@ -153,7 +153,10 @@ def fit_classifier(data_dir: Path, *, hidden: int, epochs: int, lr: float, seed:
             "train_accuracy": float((model(X).argmax(-1) == y).float().mean()),
             "heldout_accuracy": float((model(Xv).argmax(-1) == yv).float().mean()),
         }
-    torch.save({"state_dict": model.state_dict(), "classes": classes, "hidden": hidden}, data_dir / "classifier.pt")
+    torch.save(
+        {"state_dict": model.state_dict(), "classes": classes, "hidden": hidden, "n_markers": cells.n_vars},
+        data_dir / "classifier.pt",
+    )
     return {"n_classes": len(classes), "epochs": epochs, **acc}
 
 
@@ -174,7 +177,7 @@ def load_classifier(data_dir: Path, device: str):
     import torch
 
     state = torch.load(data_dir / "classifier.pt", map_location=device, weights_only=True)
-    model = _classifier_module(state["state_dict"]["0.weight"].shape[1], len(state["classes"]), state["hidden"])
+    model = _classifier_module(state["n_markers"], len(state["classes"]), state["hidden"])
     model.load_state_dict(state["state_dict"])
     return model.to(device).eval().requires_grad_(False), state["classes"]
 
@@ -203,12 +206,16 @@ def guide(
     n_steps: int,
     scale: float,
     max_strength: float,
-    n_context: int,
+    n_cells: int,
     surrogate_steps: int,
     readout: str,
     seed: int,
 ) -> dict:
-    """Samples guided and unguided designs and writes ``designs.csv`` and ``summary.json`` to ``out_dir``."""
+    """Samples guided and unguided designs and writes ``designs.csv`` and ``summary.json`` to ``out_dir``.
+
+    The surrogate generates ``n_cells`` cells per design to predict its response. The designs are guided with
+    one draw of those cells and scored with another, so the summary does not reward fitting the guiding noise.
+    """
     from functools import partial
 
     import torch
@@ -219,7 +226,7 @@ def guide(
         PathFlowMap,
         SurrogatePotential,
         SurrogateResponse,
-        cross_entropy,
+        cross_entropy_probs,
         squared_error,
     )
     from sckitflow.data import FlowDataModule
@@ -234,39 +241,53 @@ def guide(
     for model in (surrogate, prior):
         model.module.to(device).eval().requires_grad_(False)
     inferer = surrogate.inference_method
-    inferer.config = inferer.config.model_copy(update={"n_steps": surrogate_steps})
-
-    # The potential reads its context (one leaf, n_context cells) from training cells; only their count matters
-    # when generating from noise. The target is the held-out design's own response.
-    rng = np.random.default_rng(seed)
-    context = cells[rng.choice(np.flatnonzero(cells.obs["split"] == "train"), n_context, replace=False)].copy()
+    # Generating from noise, the surrogate draws `n_samples` cells per design, and nothing of the context's cells
+    # but their single leaf: one training cell is enough. The target is the held-out design's own response.
+    inferer.config = inferer.config.model_copy(update={"n_steps": surrogate_steps, "n_samples": n_cells})
+    context = cells[np.flatnonzero(cells.obs["split"] == "train")[:1]].copy()
     is_target = (cells.obs["design_id"] == target).to_numpy()
     if readout == "classifier":
         classifier, classes = load_classifier(data_dir, device)
         # ``ȳ*``: the target design's observed composition, from the cell types the classifier was trained on.
-        counts = cells.obs.loc[is_target, "cell_type"].astype(str).fillna(UNASSIGNED).value_counts()
+        counts = cells.obs.loc[is_target, "cell_type"].astype(object).fillna(UNASSIGNED).astype(str).value_counts()
         ystar = torch.as_tensor(
             (counts.reindex(classes).fillna(0) / is_target.sum()).to_numpy(), dtype=torch.float32, device=device
         )
-        readout_fn, potential_fn = partial(classifier_readout, classifier=classifier), cross_entropy
+        readout_fn, potential_fn = partial(classifier_readout, classifier=classifier), cross_entropy_probs
     else:
         ystar = torch.as_tensor(cells.X[is_target].mean(0), device=device)
         readout_fn, potential_fn = None, squared_error
-    response = SurrogateResponse(
-        inferer=inferer,
-        datamodule=FlowDataModule.from_adata(context, surrogate.manager, n_train_steps=1, batch_size=n_context),
-        adata=context,
-        readout=readout_fn,
-        require_target_state=False,
-        seed=seed,
-    )
-    potential = SurrogatePotential(response, ystar=ystar, potential=potential_fn).to(device)
+    datamodule = FlowDataModule.from_adata(context, surrogate.manager, n_train_steps=1, batch_size=1)
+
+    def response(response_seed: int) -> SurrogateResponse:
+        return SurrogateResponse(
+            inferer=inferer,
+            datamodule=datamodule,
+            adata=context,
+            readout=readout_fn,
+            require_target_state=False,
+            seed=response_seed,
+        )
+
+    potential = SurrogatePotential(response(seed), ystar=ystar, potential=potential_fn).to(device)
+    scoring = response(seed + 1)
 
     def psi(x: torch.Tensor) -> torch.Tensor:
         return potential({DESIGN_KEY: x})
 
+    def score(x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        """Each design's potential and response under the scoring draw, averaged over the context's groups."""
+        with torch.no_grad():
+            y = scoring({DESIGN_KEY: x})
+        return potential_fn(y, ystar).mean(0), y.mean(0)
+
     path = prior.inference_method.probability_path
-    x0 = torch.randn(n_designs, designs.n_vars, generator=torch.Generator().manual_seed(seed)).to(device)
+    x0 = prior.inference_method.noise_sampler(
+        (n_designs, designs.n_vars),
+        generator=torch.Generator(device=device).manual_seed(seed),
+        device=device,
+        dtype=torch.float32,
+    )
     time = torch.linspace(0, 1, n_steps, device=device)
     samples = {}
     for name, s in (("prior", 0.0), ("guided", scale)):
@@ -284,17 +305,11 @@ def guide(
         summary["target_type"] = classes[top]
         summary["target_type_observed_fraction"] = float(ystar[top])
 
-    def achieved(x: torch.Tensor) -> float | None:
-        """The predicted fraction of the target type, averaged over the designs."""
-        return None if top is None else float(response({DESIGN_KEY: x})[..., top].mean())
-
-    with torch.no_grad():
-        summary["target_potential"] = float(psi(target_x[None])[0])
-        summary["train_potential_min"] = float(psi(train_x).min())
+    summary["target_potential"] = float(score(target_x[None])[0][0])
+    summary["train_potential_min"] = float(score(train_x)[0].min())
     for name, x in samples.items():
-        with torch.no_grad():
-            pot = psi(x)
-            frac = achieved(x)
+        pot, y = score(x)
+        frac = None if top is None else float(y[..., top].mean())
         dist = torch.linalg.vector_norm(x - target_x, dim=-1)
         nearest = torch.cdist(x, train_x).min(-1).values
         summary[name] = {
@@ -338,10 +353,10 @@ def main() -> None:
     g.add_argument("prior_dir", type=Path)
     g.add_argument("out_dir", type=Path)
     g.add_argument("--n-designs", type=int, default=64)
-    g.add_argument("--n-steps", type=int, default=50)
+    g.add_argument("--n-steps", type=int, default=50, help="time points of the prior's ODE, n_steps - 1 Euler steps")
     g.add_argument("--scale", type=float, default=1.0)
     g.add_argument("--max-strength", type=float, default=10.0)
-    g.add_argument("--n-context", type=int, default=256, help="cells generated per design by the surrogate")
+    g.add_argument("--n-cells", type=int, default=256, help="cells the surrogate generates per design")
     g.add_argument("--surrogate-steps", type=int, default=20, help="ODE steps of the surrogate inside guidance")
     g.add_argument(
         "--readout",

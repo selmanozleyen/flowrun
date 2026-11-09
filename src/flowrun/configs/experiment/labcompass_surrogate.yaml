@@ -20,8 +20,7 @@ training:
 inference:
   generate_from_noise: true
   n_steps: 20
-  n_samples: 1          # one cell per context cell: the Monte Carlo average over M is the context's size,
-                        # so guidance costs n_context cells per potential, not n_context * n_samples.
+  n_samples: 1          # cells per design at evaluation; `flowrun-labcompass guide --n-cells` sets its own
 
 module:
   condition_encoder:
