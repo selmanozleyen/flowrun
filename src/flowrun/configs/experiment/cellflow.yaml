@@ -53,7 +53,7 @@ training:
   generate_from_noise: false        # the flow starts from the matched control cells
 
 probability_path:                   # CellFlow's default: no noise
-  type: paths.two_sided.linear
+  type: probability_path.linear
   sigma: 0.0
 
 inference:

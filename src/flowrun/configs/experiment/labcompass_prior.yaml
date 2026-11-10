@@ -11,7 +11,7 @@ datamanager:
   target_sample_rep: null
 
 probability_path:
-  type: paths.two_sided.linear
+  type: probability_path.linear
   sigma: 0.0           # required by guidance: its flow map follows a deterministic path
 
 training:

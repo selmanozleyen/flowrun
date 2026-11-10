@@ -34,11 +34,11 @@ paths:
 # -----------------------------------------------------------------------------
 # Probability path: a `sckitflow.core.probability_paths` registry spec.
 #
-# `type`: paths.two_sided.{linear,trig,enc_dec} | paths.one_sided.{linear,trig,vp}
-# `sigma > 0` adds noise (Gaussian sampler); one-sided paths need it.
+# `type`: probability_path.{linear,trig,enc_dec}
+# `sigma > 0` adds noise (Gaussian sampler); enc_dec needs it.
 # -----------------------------------------------------------------------------
 probability_path:
-  type: "paths.two_sided.linear"
+  type: "probability_path.linear"
   sigma: 0.1
 
 # -----------------------------------------------------------------------------

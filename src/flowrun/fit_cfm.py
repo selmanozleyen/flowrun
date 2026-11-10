@@ -40,7 +40,7 @@ Key concepts
 - **Conditional Flow Matching (CFM)**: learns a velocity field v(x, t | c) that
   transports a source distribution to a target distribution conditioned on c.
 - **Probability path**: defines the interpolation between source and target
-  samples, named by its registry type (``paths.two_sided.linear``, ``paths.one_sided.vp``, ...). See
+  samples, named by its registry type (``probability_path.linear``, ``probability_path.trig``, ...). See
   ``sckitflow.core.probability_paths``.
 - **Velocity field**: the network that predicts the time derivative along the
   path. Here an MLP with separate state/time/condition encoders.
@@ -368,7 +368,7 @@ def main(config: DictConfig) -> float:
 
     # Initialize probability path
     logger.info("Initializing probability path.")
-    # A registry spec (`paths.two_sided.linear`, `paths.one_sided.vp`, ...); a noisy path gets the Gaussian sampler.
+    # A registry spec (`probability_path.linear`, `probability_path.trig`, ...); a noisy path gets the Gaussian sampler.
     path_spec = OmegaConf.to_container(config.probability_path, resolve=True)
     if path_spec.get("sigma", 0) > 0:
         path_spec.setdefault("sampler_cfg", {"type": "noise_sampler.isotropic_gaussian"})

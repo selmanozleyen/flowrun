@@ -701,9 +701,9 @@ class TestFitCFMRunsAxes:
             pytest.param(
                 combine(
                     pair="one_cat_paired",
-                    probability_path=["probability_path.type=paths.one_sided.vp", "probability_path.sigma=1.0"],
+                    probability_path=["probability_path.type=probability_path.trig", "probability_path.sigma=1.0"],
                 ),
-                id="one-sided-vp",
+                id="noisy-trig",
             ),
         ],
     )
