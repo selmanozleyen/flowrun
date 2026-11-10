@@ -226,18 +226,16 @@ def test_guide_refuses_a_foreign_split(trained, tmp_path: Path):
 
 
 def test_guide_refuses_a_resplit_run(trained, tmp_path: Path):
+    """A prior trained with ``splitter.overwrite=true`` may have seen the held-out recipe."""
     root, _ = trained
-    path = root / "prior" / "save" / "config_resolved.yaml"
-    original = path.read_text()
-    config = OmegaConf.load(path)
+    for part in ("data", "surrogate", "prior"):  # a private copy, so the shared fixture stays untouched
+        shutil.copytree(root / part, tmp_path / part)
+    config = OmegaConf.load(tmp_path / "prior" / "save" / "config_resolved.yaml")
     config.splitter.overwrite = True
-    OmegaConf.save(config, path)
-    try:
-        with pytest.raises(ValueError, match="splitter.overwrite=true"):
-            _guide(root, tmp_path, n_designs=1, n_steps=None, scale=1.0, max_strength=1.0, n_cells=1,
-                   surrogate_steps=None, readout="markers", seed=0)  # fmt: skip
-    finally:
-        path.write_text(original)
+    OmegaConf.save(config, tmp_path / "prior" / "save" / "config_resolved.yaml")
+    with pytest.raises(ValueError, match="splitter.overwrite=true"):
+        _guide(tmp_path, tmp_path / "out", n_designs=1, n_steps=None, scale=1.0, max_strength=1.0, n_cells=1,
+               surrogate_steps=None, readout="markers", seed=0)  # fmt: skip
 
 
 @pytest.mark.parametrize(("n_steps", "n_cells"), [(1, 1), (None, 0)])
