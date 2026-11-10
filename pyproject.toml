@@ -26,6 +26,7 @@ dependencies = [
   "numpy",
   "omegaconf",
   "scanpy>=1.10",
+  "scfit",                   # direct, so the git source below applies (uv reads only the root's sources)
   "scikit-learn",
   "sckitflow[torch]",
   "torch",                   # direct, so the accelerator sources below apply
@@ -55,7 +56,8 @@ optional-dependencies.notebook = [
 build.targets.wheel.packages = [ "src/flowrun" ]
 
 [tool.uv]
-sources.sckitflow = { git = "https://github.com/selmanozleyen/sckitflow", branch = "feat/loss-guidance" }
+sources.sckitflow = { git = "https://github.com/selmanozleyen/sckitflow", branch = "integrate/experiments" }
+sources.scfit = { git = "https://github.com/selmanozleyen/scfit", branch = "feat/open-adata" }
 conflicts = [ [ { extra = "cpu" }, { extra = "cu126" }, { extra = "cu130" } ] ]
 sources.torch = [
   { index = "pytorch-cpu", extra = "cpu" },
