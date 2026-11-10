@@ -5094,8 +5094,8 @@ wheels = [
 
 [[package]]
 name = "scfit"
-version = "0.0.14.dev5+g1c5a8f13b"
-source = { git = "https://github.com/selmanozleyen/scfit?branch=feat%2Fopen-adata#1c5a8f13b0399e34cd7966736a06142f7e262cd4" }
+version = "0.0.14.dev6+g8408813f4"
+source = { git = "https://github.com/selmanozleyen/scfit?branch=feat%2Fopen-adata#8408813f4116df3c91dc29c9746a831eafd64c04" }
 dependencies = [
     { name = "annbatch", extra = ["numba"] },
     { name = "anndata" },
@@ -5247,8 +5247,8 @@ wheels = [
 
 [[package]]
 name = "sckitflow"
-version = "0.1.dev1056+g025ed4054"
-source = { git = "https://github.com/selmanozleyen/sckitflow?branch=integrate%2Fexperiments#025ed4054c15c3e9c19d276231de1d32db040328" }
+version = "0.1.dev1058+g37222290d"
+source = { git = "https://github.com/selmanozleyen/sckitflow?branch=integrate%2Fexperiments#37222290d6732a2961bc15324b2cfc0f4f62c12e" }
 dependencies = [
     { name = "anndata" },
     { name = "lightning" },

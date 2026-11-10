@@ -136,7 +136,7 @@ def test_a_layer_state_goes_to_sckitflow_as_is(tiny_panels: list[Path]) -> None:
     overrides = ["+experiment=flow_cyto_panel_alignment", f"paths.target_adata=[{tiny_panels[0]},{tiny_panels[1]}]"]
     with initialize_config_dir(config_dir=CONFIGS, version_base=None):
         cfg = compose(config_name="fit_cfm", overrides=[*overrides, "datamanager.quad_from_state=false"])
-    adatas = fit_cfm.read_inputs(cfg)
+    adatas = fit_cfm.read_inputs(cfg, fit_preprocessing=fit_cfm.preprocesses(cfg.preprocessing))
     for a in adatas:  # the state on disk and the label; not X, which the run never reads
         assert (
             a.X is None

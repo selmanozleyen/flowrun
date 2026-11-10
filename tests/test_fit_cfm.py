@@ -58,9 +58,7 @@ Notes
   ``X_coupling_lin`` is generated fresh with i.i.d. noise per cell, so the
   coupling cost matrix is non-degenerate regardless of how the base
   fixture shapes its other reps.
-* ``gromov-wasserstein`` passes ``rep_lin`` (not ``use_linear=false``):
-  ``ot_quadratic_coupling`` unconditionally calls
-  ``to_torch_tensor(source_lin)`` and fails on ``None``.
+* ``gromov-wasserstein`` passes ``rep_lin``; ``pure_gromov_wasserstein`` drops it.
 * Runs cap at ``fast_dev_run``; deselect with ``-m "not slow"`` locally.
 """
 
@@ -163,7 +161,6 @@ def _dm_shared(**overrides_kwargs) -> dict:
         "rep_lin": None,
         "source_rep_quad": None,
         "target_rep_quad": None,
-        "use_linear": True,
         "target_continuous_covs": [],
     }
     base.update(overrides_kwargs)
@@ -496,6 +493,13 @@ _COUPLING_PAIRS: dict[str, list[str]] = {
         },
         vf_overrides=_enable_source_encoder(),
     ),
+    # ---- Pure Gromov-Wasserstein — quads alone, no rep_lin ------------
+    "pure_gromov_wasserstein": _coupling_pair(
+        "gromov-wasserstein",
+        base_schema="one_cat_paired",
+        dm_extra={"source_rep_quad": "obsm.X_src_quad", "target_rep_quad": "obsm.X_tgt_quad"},
+        vf_overrides=_enable_source_encoder(),
+    ),
     # ---- Fused — linear + quads blended by `alpha` -------------------
     "fused": _coupling_pair(
         "fused",
@@ -679,17 +683,6 @@ class TestFitCFMRunsAxes:
             pytest.param(
                 combine(pair="one_cat_paired", inference="mid"),
                 id="inference-mid",
-            ),
-            pytest.param(
-                combine(
-                    pair="one_cat_paired",
-                    datamanager=[
-                        "datamanager.use_linear=false",
-                        "datamanager.source_rep_quad=obsm.X_src_quad",
-                        "datamanager.target_rep_quad=obsm.X_tgt_quad",
-                    ],
-                ),
-                id="use-linear-false",
             ),
             pytest.param(
                 combine(

@@ -19,13 +19,13 @@ from omegaconf import OmegaConf
 from scipy.stats import ks_2samp, spearmanr
 
 matplotlib.use("Agg")
-import matplotlib.pyplot as plt  # noqa: E402
+import matplotlib.pyplot as plt
+from sckitflow import Model
+from sckitflow.core.methods import ODEInference
+from sckitflow.data import FlowDataModule
 
-from flowrun.fit_cfm import enable_zarrs, read_inputs  # noqa: E402
-from flowrun.panels import _state_values, from_state  # noqa: E402
-from sckitflow import Model  # noqa: E402
-from sckitflow.core.methods import ODEInference  # noqa: E402
-from sckitflow.data import FlowDataModule  # noqa: E402
+from flowrun.fit_cfm import enable_zarrs, read_inputs
+from flowrun.panels import from_state, state_values
 
 # name -> (n_steps, n_samples): n_samples > 1 gives X as the mean over samples, 1 gives one sample per cell
 SETTINGS = {"mean100@10": (10, 100), "sample@10": (10, 1), "sample@50": (50, 1), "sample@200": (200, 1)}
@@ -58,8 +58,10 @@ def shared_correlation(gen: np.ndarray, source: np.ndarray, markers, shared, src
 
     1 means the cell's own value carries through (up to a monotone recalibration); 0 means the source is ignored.
     """
-    return pd.Series({m: spearmanr(gen[:, markers.index(m)], source[:, src_idx[m]]).statistic for m in shared},
-                     name="spearman(gen, own source)")
+    return pd.Series(
+        {m: spearmanr(gen[:, markers.index(m)], source[:, src_idx[m]]).statistic for m in shared},
+        name="spearman(gen, own source)",
+    )
 
 
 def plot(name: str, gen: np.ndarray, real: np.ndarray, old: np.ndarray, markers, shared, src_idx, path: Path) -> None:
@@ -70,7 +72,9 @@ def plot(name: str, gen: np.ndarray, real: np.ndarray, old: np.ndarray, markers,
         bins = np.linspace(lo - 0.5, hi + 0.5, 80)
         ax.hist(real[:, j], bins=bins, density=True, histtype="step", color="tab:blue", label="real (new, test)")
         ax.hist(gen[:, j], bins=bins, density=True, histtype="step", color="tab:red", label="generated")
-        title = f"{m} ({'shared' if m in shared else 'own'})\nKS(gen,real)={ks_2samp(gen[:, j], real[:, j]).statistic:.3f}"
+        title = (
+            f"{m} ({'shared' if m in shared else 'own'})\nKS(gen,real)={ks_2samp(gen[:, j], real[:, j]).statistic:.3f}"
+        )
         if m in shared:
             o = old[:, src_idx[m]]
             ax.hist(o, bins=bins, density=True, histtype="step", color="tab:green", label="old (source)")
@@ -91,7 +95,7 @@ def main() -> None:
     out.mkdir(parents=True, exist_ok=True)
     enable_zarrs()
     cfg = OmegaConf.load(run / ".hydra" / "config.yaml")
-    adatas = read_inputs(cfg)
+    adatas = read_inputs(cfg, fit_preprocessing=False)
     from_state(adatas, OmegaConf.to_container(cfg.datamanager, resolve=True))
     model = Model.from_pretrained(run / "save", adatas)
     model.module.to("cuda").eval()
@@ -104,14 +108,16 @@ def main() -> None:
     source, target = adatas[is_source.index(True)], adatas[is_source.index(False)]
     state = cfg.datamanager.target_sample_rep
     split = cfg.splitter.split_key if "$" not in str(cfg.splitter.split_key) else f"split_{cfg.run.splitter_seed}"
-    source_all = _state_values(source, state)
-    real = _state_values(target, state)[(target.obs[split] == "test").to_numpy()]
+    source_all = state_values(source, state)
+    real = state_values(target, state)[(target.obs[split] == "test").to_numpy()]
     markers = list(target.var_names)
     shared = sorted(set(source.var_names) & set(markers))
     src_idx = {m: list(source.var_names).index(m) for m in shared}
     rows = np.sort(np.random.default_rng(0).choice(source.n_obs, size=min(n_cells, source.n_obs), replace=False))
-    print(f"source {source.n_obs} cells, target test {len(real)} cells, {len(markers)} markers, {len(shared)} shared",
-          flush=True)
+    print(
+        f"source {source.n_obs} cells, target test {len(real)} cells, {len(markers)} markers, {len(shared)} shared",
+        flush=True,
+    )
 
     ks_rows, summary = [], []
     names = sys.argv[4].split(",") if len(sys.argv) > 4 else list(SETTINGS)  # a subset of SETTINGS
@@ -121,11 +127,20 @@ def main() -> None:
         gen = predict(model, step_data, source_all[rows], n_steps, n_samples)
         secs = time.perf_counter() - t0
         for j, m in enumerate(markers):
-            ks_rows.append({"setting": name, "marker": m, "ks": ks_2samp(gen[:, j], real[:, j]).statistic,
-                            "shared": m in shared})
+            ks_rows.append(
+                {"setting": name, "marker": m, "ks": ks_2samp(gen[:, j], real[:, j]).statistic, "shared": m in shared}
+            )
         ed = energy_distance(gen, real)
-        summary.append({"setting": name, "n_steps": n_steps, "n_samples": n_samples, "edist": ed,
-                        "mean_ks": float(np.mean([r["ks"] for r in ks_rows if r["setting"] == name])), "secs": secs})
+        summary.append(
+            {
+                "setting": name,
+                "n_steps": n_steps,
+                "n_samples": n_samples,
+                "edist": ed,
+                "mean_ks": float(np.mean([r["ks"] for r in ks_rows if r["setting"] == name])),
+                "secs": secs,
+            }
+        )
         print(json.dumps(summary[-1]), flush=True)
         plot(name, gen, real, source_all[rows], markers, shared, src_idx, out / f"markers_{name.replace('@', '_')}.png")
         if n_samples == 1:
@@ -133,8 +148,14 @@ def main() -> None:
             corr.to_csv(out / f"shared_corr_{name.replace('@', '_')}.csv")
             print(f"{name} spearman(gen, own source): mean {corr.mean():.3f}", corr.round(3).to_dict(), flush=True)
     for m in shared:
-        ks_rows.append({"setting": "old (source)", "marker": m, "shared": True,
-                        "ks": ks_2samp(source_all[rows][:, src_idx[m]], real[:, markers.index(m)]).statistic})
+        ks_rows.append(
+            {
+                "setting": "old (source)",
+                "marker": m,
+                "shared": True,
+                "ks": ks_2samp(source_all[rows][:, src_idx[m]], real[:, markers.index(m)]).statistic,
+            }
+        )
 
     ks = pd.DataFrame(ks_rows)
     ks.to_csv(out / "ks_per_marker.csv", index=False)

@@ -91,7 +91,7 @@ import hydra
 import numpy as np
 import pandas as pd
 import torch
-from anndata.acc import LayerAcc, MultiAcc
+from anndata.acc import A, AdRef, MultiAcc
 from lightning.pytorch import Trainer, seed_everything
 from lightning.pytorch.callbacks import (
     EarlyStopping,
@@ -126,7 +126,7 @@ from sckitflow.trainer import TrainingPlan
 
 from flowrun import split
 from flowrun._callbacks import BestMetrics
-from flowrun._store import exclusive, present, read_obs_column, write_obs_column
+from flowrun._store import exclusive, read_obs_column, write_obs_column
 from flowrun.panels import from_state
 from flowrun.preprocess import preprocess, write_preprocessing
 
@@ -176,49 +176,46 @@ def preprocesses(pp: DictConfig) -> bool:
     return pp.pca is not None or pp.zscore or pp.whitening is not None
 
 
-def _where(ref) -> str:
-    """Where an array or ``obs`` column reference lives in a store: ``"X"``, ``"layers/<k>"``, ``"obsm/<k>"``, ..."""
-    match ref:
-        case LayerAcc(k=None):
-            return "X"
-        case LayerAcc(k=k):
-            return f"layers/{k}"
-        case MultiAcc(k=k):
-            return f"obsm/{k}"
-    return f"obs/{ref.idx}"
-
-
-def read_inputs(config: DictConfig) -> list[ad.AnnData]:
+def read_inputs(config: DictConfig, *, fit_preprocessing: bool) -> list[ad.AnnData]:
     """The files of ``paths.target_adata``, each opened with only what the run reads.
 
-    That is what the schema reads (:meth:`~sckitflow.data.DataManager.get_required_fields`), the splitter's columns
-    and, when the run preprocesses, the preprocessing's input in place of the state it writes. Zarr arrays stay on
-    disk. Sources and targets may sit in different files, so a file is opened with the parts it holds; a part no
-    file holds is asked of every file, so opening fails naming what each has. The split column is the exception:
-    the run writes it.
+    That is what the schema reads (:meth:`~sckitflow.data.DataManager.get_required_fields`) and the splitter's
+    columns. With ``fit_preprocessing``, the run fits the preprocessing, so it reads ``preprocessing.input_rep`` in
+    place of the state the preprocessing writes; a run reading a fitted model's inputs reads the state. Zarr arrays
+    stay on disk. Sources and targets may sit in different files, so each file is opened with the parts it holds,
+    and a part no file holds raises naming what the first file has. The split column is the exception: the run
+    writes it.
     """
     from anndata.acc import A
     from scfit.data import open_adata
 
-    # coupling terms from the state are derived in memory (`panels.from_state`), not read
-    dm = OmegaConf.to_container(config.datamanager, resolve=True)
-    dm_cfg = DataManagerConfig(**{k: v for k, v in dm.items() if not k.endswith("_from_state")})
+    dm_cfg = DataManagerConfig(**datamanager_config(config))
     refs, uns = dm_cfg.build().get_required_fields()
     pp, splitter = config.preprocessing, config.splitter
-    if preprocesses(pp):
-        refs = [r for r in refs if r != dm_cfg.target_sample_rep]
-        refs.append(A.X if pp.pca is not None or pp.input_key is None else A.obsm[pp.input_key])
+    if fit_preprocessing:
+        refs = [r for r in refs if r != dm_cfg.target_sample_rep] + [A.resolve(pp.input_rep, vec=False)]
     refs += [A.obs[c] for c in (splitter.source_key, splitter.key, *splitter.group_keys) if c is not None]
-    entries = {_where(r): r for r in refs} | {f"uns/{k}": k for k in uns}
     paths = as_list(config.paths.target_adata)
-    held = [present(p, entries) for p in paths]
-    nowhere = set(entries) - set().union(*held) - {f"obs/{splitter.split_key}"}
-    adatas = []
-    for path, has in zip(paths, held, strict=True):
-        wanted = [e for e in entries if e in has or e in nowhere]
-        arrays = [entries[e] for e in wanted if not e.startswith("uns/")]
-        adatas.append(open_adata(path, *arrays, uns=[entries[e] for e in wanted if e.startswith("uns/")]))
+    adatas = [open_adata(p, *refs, uns=uns, missing="skip") for p in paths]
+    nowhere = [r for r in refs if r != A.obs[splitter.split_key] and not any(_isin(r, a) for a in adatas)]
+    nowhere_uns = [k for k in uns if not any(k in a.uns for a in adatas)]
+    if nowhere or nowhere_uns:
+        open_adata(paths[0], *nowhere, uns=nowhere_uns)  # raises, naming what the first file has
     return adatas
+
+
+def _isin(ref, adata: ad.AnnData) -> bool:
+    """Whether ``adata`` has the array or obs column ``ref``."""
+    return ref.acc.isin(adata, ref.idx) if isinstance(ref, AdRef) else ref.isin(adata)
+
+
+def datamanager_config(config: DictConfig) -> dict:
+    """``config.datamanager`` as the plain dict ``DataManagerConfig`` takes, without flowrun's ``*_from_state`` keys.
+
+    Coupling terms from the state are derived in memory (:func:`~flowrun.panels.from_state`), not read.
+    """
+    dm = OmegaConf.to_container(config.datamanager, resolve=True)
+    return {k: v for k, v in dm.items() if not k.endswith("_from_state")}
 
 
 KEY_PARAMETERS = (
@@ -293,7 +290,7 @@ def main(config: DictConfig) -> float:
     # applied to the data.
     # One file or a list read as one dataset (rows in list order), each file with only what the run uses.
     paths = [Path(p) for p in as_list(config.paths.target_adata)]
-    adatas = read_inputs(config)
+    adatas = read_inputs(config, fit_preprocessing=preprocesses(config.preprocessing))
     logger.info(
         f"Read {len(adatas)} file(s): " + ", ".join(f"{p.name} ({a.n_obs} cells)" for p, a in zip(paths, adatas))
     )
@@ -340,18 +337,18 @@ def main(config: DictConfig) -> float:
     pp = config.preprocessing
     preprocessed = preprocesses(pp)
     if preprocessed:
-        state = str(config.datamanager.target_sample_rep)
-        if not state.startswith("obsm."):
+        state = A.resolve(str(config.datamanager.target_sample_rep), vec=False)
+        if not isinstance(state, MultiAcc):
             raise ValueError(
-                f"Preprocessing writes the state to obsm, but datamanager.target_sample_rep is {state!r}; set it to "
+                f"Preprocessing writes the state to obsm, but datamanager.target_sample_rep is {state}; set it to "
                 "obsm.<key>."
             )
-        key_added = state.removeprefix("obsm.")
-        if pp.pca is None and pp.input_key == key_added:
+        key_added = state.k
+        if A.resolve(pp.input_rep, vec=False) == state:
             raise ValueError(
-                f"preprocessing.input_key and datamanager.target_sample_rep both name obsm[{key_added!r}]: the "
-                "preprocessing would overwrite its own input. Write it to another key (datamanager.target_sample_rep), "
-                "which the model then reads."
+                f"preprocessing.input_rep and datamanager.target_sample_rep both name {state}: the preprocessing "
+                "would overwrite its own input. Write it to another key (datamanager.target_sample_rep), which the "
+                "model then reads."
             )
         train_mask = np.concatenate([a.obs[splitter.split_key].isin(["train", "all"]).to_numpy() for a in adatas])
         preprocess(
@@ -363,7 +360,7 @@ def main(config: DictConfig) -> float:
             zscore=pp.zscore,
             whitening=pp.whitening,
             epsilon=pp.epsilon,
-            input_key=pp.input_key,
+            input_rep=pp.input_rep,
             key_added=key_added,
         )
 
@@ -485,13 +482,7 @@ def main(config: DictConfig) -> float:
 
     # Initialize wrapped method for matched training.
     logger.info("Initializing matched wrapper.")
-    # Random pairs need no matching: the loader draws sources and targets independently. Matching would ask for a
-    # coupling rep to compute a cost the independent coupling never uses.
-    training_cfg = (
-        base_training_cfg
-        if isinstance(coupling_cfg, IndependentCouplingConfig)
-        else MatchedTrainingConfig(method=base_training_cfg, coupling=coupling_cfg)
-    )
+    training_cfg = MatchedTrainingConfig(method=base_training_cfg, coupling=coupling_cfg)
 
     logger.info("Building training method.")
     training_method = training_cfg.build(

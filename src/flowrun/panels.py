@@ -24,7 +24,7 @@ from pathlib import Path
 import anndata as ad
 import numpy as np
 import pandas as pd
-from anndata.acc import A
+from anndata.acc import A, LayerAcc
 
 
 def prepare_panels(
@@ -48,7 +48,7 @@ def prepare_panels(
 _SHARED, _OWN = "shared_features", "own_features"
 
 
-def _state_values(a: ad.AnnData, rep: str) -> np.ndarray:
+def state_values(a: ad.AnnData, rep: str) -> np.ndarray:
     """The rep ``rep`` (``"X"``, ``"layers.<k>"`` or ``"obsm.<k>"``) of ``a`` as float32, read into memory."""
     return np.asarray(A.resolve(rep, vec=False).get(a)[:], dtype=np.float32)
 
@@ -66,7 +66,7 @@ def from_state(adatas: Sequence[ad.AnnData], datamanager: Mapping) -> tuple[dict
     if not (lin or quad):
         return dm, None
     target, source = dm.get("target_sample_rep"), dm.get("source_sample_rep")
-    if not (target == "X" or str(target).startswith("layers.")) or source not in (None, target):
+    if not isinstance(A.resolve(str(target), vec=False), LayerAcc) or source not in (None, target):
         raise ValueError(
             "lin_from_state / quad_from_state take the features by name, so the state must be `X` or `layers.<key>`, "
             f"the same for sources and targets; got target_sample_rep={target!r}, source_sample_rep={source!r}."
@@ -82,7 +82,7 @@ def from_state(adatas: Sequence[ad.AnnData], datamanager: Mapping) -> tuple[dict
         raise ValueError("The files share no feature name; rename synonyms when preparing them.")
     own = []
     for a, n in zip(adatas, names, strict=True):
-        values, col = _state_values(a, target), {v: i for i, v in enumerate(n)}
+        values, col = state_values(a, target), {v: i for i, v in enumerate(n)}
         own.append(sorted(set(n) - set(shared)))
         if lin:
             a.obsm[_SHARED] = values[:, [col[v] for v in shared]]

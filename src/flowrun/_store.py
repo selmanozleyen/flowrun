@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 import socket
 import time
-from collections.abc import Iterable, Iterator
+from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
 
@@ -78,14 +78,3 @@ def exclusive(lock: Path, *, timeout: float = 600) -> Iterator[None]:
     finally:
         os.close(fd)
         lock.unlink(missing_ok=True)
-
-
-def present(path: str | Path, entries: Iterable[str]) -> set[str]:
-    """Which of ``entries`` (``"X"``, ``"obsm/<k>"``, ``"obs/<col>"``, ``"uns/<k>"``, ...) the file holds, unread."""
-    if Path(path).suffix == ".zarr":
-        root = zarr.open_group(path, mode="r")
-        return {e for e in entries if e in root}
-    import h5py
-
-    with h5py.File(path, "r") as root:
-        return {e for e in entries if e in root}

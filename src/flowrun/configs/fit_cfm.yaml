@@ -98,8 +98,8 @@ splitter:
 #   groups / groups_reps          extra grouping metadata
 #   groups_encoding               {group: encoder spec}, e.g. {type: group_encoder.one_hot, categories: [...]}
 #   continuous_conditions  continuous condition arrays, e.g. ["obsm.design"], keyed by the array key ("design")
-#   rep_lin / source_rep_quad / target_rep_quad / use_linear
-#                                 linear-vs-quadratic representation flags
+#   rep_lin / source_rep_quad / target_rep_quad
+#                                 coupling reps; both quadratics without rep_lin is pure Gromov-Wasserstein
 # -----------------------------------------------------------------------------
 datamanager:
   target_sample_rep: "obsm.X_pca"
@@ -117,7 +117,6 @@ datamanager:
   rep_lin: null
   source_rep_quad: null
   target_rep_quad: null
-  use_linear: true
   # Coupling terms from the state's feature names (state `X` or `layers.<key>`, the same for sources and targets):
   # lin = the features every input file measures, quad = each file's own. Instead of rep_lin / *_rep_quad.
   lin_from_state: false
@@ -150,7 +149,7 @@ preprocessing:
   zscore: false
   whitening: null                 # zca | pca | cholesky
   epsilon: 1.0e-8
-  input_key: null                 # without PCA: start from obsm[input_key] (null: X)
+  input_rep: X                    # where the steps start: X, layers.<key> or obsm.<key>
   overwrite: false                # replace a preprocessing already in the input file
 
 # -----------------------------------------------------------------------------

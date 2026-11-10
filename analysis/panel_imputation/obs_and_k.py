@@ -1,6 +1,6 @@
 """The panels' obs annotations, and the GMM's K chosen by per-cell R^2 on the validation cells.
 
-    python obs_and_k.py <prepared dir> <out dir> [split key]
+python obs_and_k.py <prepared dir> <out dir> [split key]
 """
 
 import json
@@ -15,7 +15,7 @@ from sklearn.metrics import r2_score
 from sklearn.mixture import GaussianMixture
 
 sys.path.insert(0, str(Path(__file__).parent))
-from gmm_percell import gmm_conditional  # noqa: E402
+from gmm_percell import gmm_conditional
 
 FILES = {"old": "OH_OH0013_OLD_UMAP_annotated_red.zarr", "new": "260331_OH013_New_Panel_annotated_red.zarr"}
 
@@ -56,8 +56,15 @@ def main() -> None:
             gmm = GaussianMixture(K, covariance_type="full", reg_covar=1e-4, random_state=seed, max_iter=300).fit(fit)
             mean, _, resp = gmm_conditional(gmm, val[:, s_idx], s_idx, n_idx, np.random.default_rng(seed))
             r2 = [r2_score(val[:, j], mean[:, i]) for i, j in enumerate(n_idx)]
-            rows.append({"K": K, "seed": seed, "BIC": gmm.bic(fit), "val R2 mean": float(np.mean(r2)),
-                         "mean top responsibility": resp})
+            rows.append(
+                {
+                    "K": K,
+                    "seed": seed,
+                    "BIC": gmm.bic(fit),
+                    "val R2 mean": float(np.mean(r2)),
+                    "mean top responsibility": resp,
+                }
+            )
             print(json.dumps(rows[-1]), flush=True)
     table = pd.DataFrame(rows).groupby("K")[["BIC", "val R2 mean", "mean top responsibility"]].mean()
     table.to_csv(out / "k_sweep.csv")

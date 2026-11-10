@@ -32,7 +32,6 @@ datamanager:
     panel: old panel
   lin_from_state: true    # the shared markers
   quad_from_state: true   # each panel's own markers
-  use_linear: true
 
 datamodule:
   n_train_steps: 100

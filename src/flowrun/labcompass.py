@@ -130,7 +130,7 @@ def prepare(adata_path: Path, out_dir: Path, *, target_prefix: str, n_val: int, 
         uns={"design_encoding": encoding_json},
     )
     # z-scored on the training cells; `uns["preprocessing"]` maps generated cells back with `preprocess.inverse`
-    preprocess(cells, train_mask=cell_split == "train", zscore=True, key_added="zscored")
+    preprocess(cells, train_mask=cell_split == "train", zscore=True, input_rep="X", key_added="zscored")
     cells.X = cells.obsm.pop("zscored").astype(np.float32)
     _write(cells, out_dir / "cells.zarr")
     design_obs = designs.assign(target_fraction=fraction, split=pd.Categorical(split.to_numpy()))
