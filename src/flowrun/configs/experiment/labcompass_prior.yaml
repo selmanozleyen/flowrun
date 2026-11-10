@@ -1,6 +1,8 @@
 # @package _global_
 # LabCompass design prior: an unconditional flow over the encoded designs (one row per design in X).
 #   flowrun-fit-cfm +experiment=labcompass_prior paths.target_adata=<out>/designs.zarr paths.out_dir=runs/prior
+# `flowrun-labcompass guide` loads the model from `runs/prior/save` and refuses a run that re-split
+# (splitter.overwrite=true): the split `prepare` wrote is what keeps the target recipe out of training.
 splitter:
   source_key: null
   group_keys: []
@@ -10,7 +12,7 @@ datamanager:
 
 probability_path:
   type: paths.two_sided.linear
-  sigma: 0.0
+  sigma: 0.0           # required by guidance: its flow map follows a deterministic path
 
 training:
   generate_from_noise: true
@@ -18,7 +20,7 @@ training:
 inference:
   generate_from_noise: true
   n_steps: 50
-  n_samples: 256
+  n_samples: 256        # designs drawn per validation step; guide draws its own --n-designs
 
 module:
   state_encoder: {output_dim: 128, mlp: {hidden_dims: [256, 256]}}
@@ -31,6 +33,4 @@ datamodule:
 trainer:
   max_epochs: 10
 
-callbacks:
-  grad_accumulation:
-    scheduling: {0: 1}
+# No gradient accumulation: fit_cfm's schedule starts at epoch 5000, past max_epochs.

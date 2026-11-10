@@ -2,6 +2,8 @@
 # LabCompass forward surrogate: cells (z-scored markers in X) generated from noise given the encoded design.
 # Data and split come from `flowrun-labcompass prepare`:
 #   flowrun-fit-cfm +experiment=labcompass_surrogate paths.target_adata=<out>/cells.zarr paths.out_dir=runs/surrogate
+# `flowrun-labcompass guide` loads the model from `runs/surrogate/save` and refuses a run that re-split
+# (splitter.overwrite=true): the split `prepare` wrote is what keeps the target recipe out of training.
 splitter:
   source_key: null
   group_keys: []
@@ -12,7 +14,7 @@ datamanager:
 
 probability_path:
   type: paths.two_sided.linear
-  sigma: 0.0
+  sigma: 0.0           # required by guidance: its flow map follows a deterministic path
 
 training:
   generate_from_noise: true
@@ -36,6 +38,4 @@ datamodule:
 trainer:
   max_epochs: 20
 
-callbacks:
-  grad_accumulation:
-    scheduling: {0: 1}
+# No gradient accumulation: fit_cfm's schedule starts at epoch 5000, past max_epochs.
