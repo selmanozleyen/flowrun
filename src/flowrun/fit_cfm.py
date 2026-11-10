@@ -15,7 +15,8 @@ Pipeline (in the order ``main`` executes them)
 4. Build the velocity field (``NeuralVelocityConfig``, from the spec in ``config.module``).
 5. Build the base training method (``CFMTrainingConfig``), wrap it in a
    ``MatchedTrainingConfig`` that pairs source/target samples according to
-   ``config.coupling``, and build the inference method (``ODEInferenceConfig``).
+   ``config.coupling`` (``independent`` keeps the random pairs the loader draws, unwrapped), and build the
+   inference method (``ODEInferenceConfig``).
    Probability path and samplers arrive as portable ``*Config`` objects so
    ``Model.save_pretrained`` can serialize them; each method resolves them to a callable
    inside ``build``.
@@ -53,7 +54,7 @@ Key concepts
   objects (portable — the run's spec serializes them). See
   ``sckitflow.core._samplers``.
 - **PCA**: optional, fitted on the training split only and written to
-  ``obsm[target_sample_rep]``, with z-score and whitening. Configured via ``config.preprocessing``; see
+  ``target_sample_rep`` (``obsm.<key>``), with z-score and whitening. Configured via ``config.preprocessing``; see
   ``flowrun.preprocess``.
 - **Inference**: integrates the learned ODE from t=0 to t=1 with ``torchdiffeq``,
   configured via ``ODEInferenceConfig``.
@@ -90,6 +91,7 @@ import hydra
 import numpy as np
 import pandas as pd
 import torch
+from anndata.acc import LayerAcc, MultiAcc
 from lightning.pytorch import Trainer, seed_everything
 from lightning.pytorch.callbacks import (
     EarlyStopping,
@@ -124,7 +126,7 @@ from sckitflow.trainer import TrainingPlan
 
 from flowrun import split
 from flowrun._callbacks import BestMetrics
-from flowrun._store import exclusive, read_obs_column, write_obs_column
+from flowrun._store import exclusive, present, read_obs_column, write_obs_column
 from flowrun.panels import from_state
 from flowrun.preprocess import preprocess, write_preprocessing
 
@@ -169,33 +171,53 @@ def as_list(value) -> list:
     return list(value) if isinstance(value, ListConfig | list | tuple) else [value]
 
 
-def read_inputs(config: DictConfig) -> list[ad.AnnData]:
-    """The files of ``paths.target_adata``, each with only what the run uses (see :mod:`flowrun.io`).
+def preprocesses(pp: DictConfig) -> bool:
+    """Whether ``config.preprocessing`` sets any step."""
+    return pp.pca is not None or pp.zscore or pp.whitening is not None
 
-    The obs columns and uns tables the schema and the splitter name are read; ``X``, every ``obsm`` rep and the
-    ``layers`` the schema names stay on disk, so the reps a run never touches cost nothing.
+
+def _where(ref) -> str:
+    """Where an array or ``obs`` column reference lives in a store: ``"X"``, ``"layers/<k>"``, ``"obsm/<k>"``, ..."""
+    match ref:
+        case LayerAcc(k=None):
+            return "X"
+        case LayerAcc(k=k):
+            return f"layers/{k}"
+        case MultiAcc(k=k):
+            return f"obsm/{k}"
+    return f"obs/{ref.idx}"
+
+
+def read_inputs(config: DictConfig) -> list[ad.AnnData]:
+    """The files of ``paths.target_adata``, each opened with only what the run reads.
+
+    That is what the schema reads (:meth:`~sckitflow.data.DataManager.get_required_fields`), the splitter's columns
+    and, when the run preprocesses, the preprocessing's input in place of the state it writes. Zarr arrays stay on
+    disk. Sources and targets may sit in different files, so a file is opened with the parts it holds; a part no
+    file holds is asked of every file, so opening fails naming what each has. The split column is the exception:
+    the run writes it.
     """
     from anndata.acc import A
+    from scfit.data import open_adata
 
-    from flowrun import io
-
-    dm, splitter = config.datamanager, config.splitter
-    cols = {
-        *dm.groups,
-        *(c for level in dm.categorical_conditions.values() for c in level),
-        dm.split_by,
-        splitter.source_key,
-        splitter.key,
-        *splitter.group_keys,
-    }
-    uns = {*dm.categorical_reps.values(), *dm.groups_reps.values()}
-    layers = {r for r in (dm.target_sample_rep, dm.source_sample_rep) if str(r).startswith("layers/")}
+    # coupling terms from the state are derived in memory (`panels.from_state`), not read
+    dm = OmegaConf.to_container(config.datamanager, resolve=True)
+    dm_cfg = DataManagerConfig(**{k: v for k, v in dm.items() if not k.endswith("_from_state")})
+    refs, uns = dm_cfg.build().get_required_fields()
+    pp, splitter = config.preprocessing, config.splitter
+    if preprocesses(pp):
+        refs = [r for r in refs if r != dm_cfg.target_sample_rep]
+        refs.append(A.X if pp.pca is not None or pp.input_key is None else A.obsm[pp.input_key])
+    refs += [A.obs[c] for c in (splitter.source_key, splitter.key, *splitter.group_keys) if c is not None]
+    entries = {_where(r): r for r in refs} | {f"uns/{k}": k for k in uns}
+    paths = as_list(config.paths.target_adata)
+    held = [present(p, entries) for p in paths]
+    nowhere = set(entries) - set().union(*held) - {f"obs/{splitter.split_key}"}
     adatas = []
-    for path in map(Path, as_list(config.paths.target_adata)):
-        present = set(io.keys(path, "obs"))
-        refs = [A.X, *(A.obsm[k] for k in io.keys(path, "obsm")), *(io.resolve(r) for r in sorted(layers))]
-        refs += [A.obs[c] for c in sorted(c for c in cols if c is not None and c in present)]
-        adatas.append(io.open_adata(path, *refs, uns=sorted(k for k in uns if k in io.keys(path, "uns"))))
+    for path, has in zip(paths, held, strict=True):
+        wanted = [e for e in entries if e in has or e in nowhere]
+        arrays = [entries[e] for e in wanted if not e.startswith("uns/")]
+        adatas.append(open_adata(path, *arrays, uns=[entries[e] for e in wanted if e.startswith("uns/")]))
     return adatas
 
 
@@ -276,7 +298,7 @@ def main(config: DictConfig) -> float:
         f"Read {len(adatas)} file(s): " + ", ".join(f"{p.name} ({a.n_obs} cells)" for p, a in zip(paths, adatas))
     )
 
-    # `layers/` states and coupling terms declared from the state, as the obsm reps sckitflow reads (in memory).
+    # Coupling terms declared from the state, as the obsm reps sckitflow reads (in memory).
     datamanager, features = from_state(adatas, OmegaConf.to_container(config.datamanager, resolve=True))
     if features is not None:
         logger.info(
@@ -316,13 +338,20 @@ def main(config: DictConfig) -> float:
 
     # Preprocessing is fitted on the training targets and the shared sources, so held-out cells never shape it.
     pp = config.preprocessing
-    preprocessed = pp.pca is not None or pp.zscore or pp.whitening is not None
+    preprocessed = preprocesses(pp)
     if preprocessed:
-        if pp.pca is None and pp.input_key == config.datamanager.target_sample_rep:
+        state = str(config.datamanager.target_sample_rep)
+        if not state.startswith("obsm."):
             raise ValueError(
-                f"preprocessing.input_key and datamanager.target_sample_rep are both {pp.input_key!r}: the preprocessing "
-                "would overwrite its own input. Write it to another key (datamanager.target_sample_rep), which the model "
-                "then reads."
+                f"Preprocessing writes the state to obsm, but datamanager.target_sample_rep is {state!r}; set it to "
+                "obsm.<key>."
+            )
+        key_added = state.removeprefix("obsm.")
+        if pp.pca is None and pp.input_key == key_added:
+            raise ValueError(
+                f"preprocessing.input_key and datamanager.target_sample_rep both name obsm[{key_added!r}]: the "
+                "preprocessing would overwrite its own input. Write it to another key (datamanager.target_sample_rep), "
+                "which the model then reads."
             )
         train_mask = np.concatenate([a.obs[splitter.split_key].isin(["train", "all"]).to_numpy() for a in adatas])
         preprocess(
@@ -335,7 +364,7 @@ def main(config: DictConfig) -> float:
             whitening=pp.whitening,
             epsilon=pp.epsilon,
             input_key=pp.input_key,
-            key_added=config.datamanager.target_sample_rep,
+            key_added=key_added,
         )
 
     # Prepare data manager.
@@ -456,9 +485,12 @@ def main(config: DictConfig) -> float:
 
     # Initialize wrapped method for matched training.
     logger.info("Initializing matched wrapper.")
-    training_cfg = MatchedTrainingConfig(
-        method=base_training_cfg,
-        coupling=coupling_cfg,
+    # Random pairs need no matching: the loader draws sources and targets independently. Matching would ask for a
+    # coupling rep to compute a cost the independent coupling never uses.
+    training_cfg = (
+        base_training_cfg
+        if isinstance(coupling_cfg, IndependentCouplingConfig)
+        else MatchedTrainingConfig(method=base_training_cfg, coupling=coupling_cfg)
     )
 
     logger.info("Building training method.")
@@ -662,7 +694,7 @@ def main(config: DictConfig) -> float:
             # Into the input file: every cell's projection, and the basis that maps predictions back to genes.
             for p, a in zip(paths, adatas, strict=True):
                 logger.info(f"Writing the preprocessing into {p}.")
-                write_preprocessing(p, a, config.datamanager.target_sample_rep, overwrite=pp.overwrite)
+                write_preprocessing(p, a, key_added, overwrite=pp.overwrite)
 
         # Return the metric the checkpoint watches (e.g. "val/edist"), so a sweep optimizes what the callbacks select on:
         # its best value, or the last logged one when no checkpoint was scored (e.g. under fast_dev_run). Never logged
