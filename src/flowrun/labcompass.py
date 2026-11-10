@@ -28,7 +28,8 @@ from scipy import sparse
 from flowrun.preprocess import preprocess
 
 DESIGN_KEY = "design"
-UNASSIGNED = "unassigned"  # cells the screen left without a type: a class of its own, so ȳ(x) still sums to 1
+UNASSIGNED = "unassigned"  # cells the screen left without a type: a class of their own, not dropped
+SCORE_DRAWS = 4  # populations each design is scored on, all drawn independently of the guiding one
 DOSES = [
     "gm-csf_[ng_ml]",
     "tpo_[ng_ml]",
@@ -57,7 +58,8 @@ def prepare(adata_path: Path, out_dir: Path, *, target_prefix: str, n_val: int, 
 
     The target is the design with the largest fraction of ``target_prefix`` cell types. It and every design with
     the same doses, the same recipe at another day or O2 level, are held out as "test", so a prior or surrogate
-    never trained on its recipe. ``n_val`` other designs are "val". Every normalisation is fit on the training rows.
+    never trained on its recipe. ``n_val`` other designs are "val"; they may share a recipe with training designs.
+    Every normalisation is fit on the training rows.
     """
     adata = ad.read_h5ad(adata_path, backed="r")
     obs = adata.obs
@@ -80,6 +82,7 @@ def prepare(adata_path: Path, out_dir: Path, *, target_prefix: str, n_val: int, 
     is_train = (split == "train").to_numpy()
     cell_split = split.to_numpy()[design_id]
 
+    # not `flowrun.preprocess`: its sqrt(var + 1e-8) blows up a column constant over the training designs
     logged = np.concatenate([np.log1p(designs[DOSES].to_numpy()), designs[LINEAR].to_numpy()], axis=1)
     mean, std = logged[is_train].mean(0), logged[is_train].std(0)
     std[std == 0] = 1  # a column constant over the training designs is only centred
@@ -94,6 +97,7 @@ def prepare(adata_path: Path, out_dir: Path, *, target_prefix: str, n_val: int, 
         "target_prefix": target_prefix,
     }
     encoded = encode(designs.to_numpy(), encoding)
+    encoding_json = json.dumps(encoding)
 
     X = adata.X[:]
     X = np.asarray(X.toarray() if sparse.issparse(X) else X, dtype=np.float32)
@@ -113,7 +117,7 @@ def prepare(adata_path: Path, out_dir: Path, *, target_prefix: str, n_val: int, 
         ),
         var=pd.DataFrame(index=var_names),
         obsm={DESIGN_KEY: encoded[design_id]},
-        uns={"design_encoding": json.dumps(encoding)},
+        uns={"design_encoding": encoding_json},
     )
     # z-scored on the training cells; `uns["preprocessing"]` maps generated cells back with `preprocess.inverse`
     preprocess(cells, train_mask=cell_split == "train", zscore=True, key_added="zscored")
@@ -125,7 +129,7 @@ def prepare(adata_path: Path, out_dir: Path, *, target_prefix: str, n_val: int, 
         X=encoded,
         obs=design_obs,
         var=pd.DataFrame(index=[f"enc_{c}" for c in DOSES + LINEAR]),
-        uns={"design_encoding": json.dumps(encoding)},
+        uns={"design_encoding": encoding_json},
     )
     _write(designs_adata, out_dir / "designs.zarr")
     return {
@@ -216,7 +220,52 @@ def decode(encoded: np.ndarray, encoding: dict) -> pd.DataFrame:
     return pd.DataFrame(np.where(encoding["log1p"], np.expm1(x), x), columns=encoding["columns"])
 
 
-SCORE_DRAWS = 4  # independent populations each design is scored on, apart from the guiding one
+def _check_split(cells: ad.AnnData, designs: ad.AnnData, target: str) -> None:
+    """Raises unless every cell has its design's split and the target is "test".
+
+    The flows only avoid the held-out rows while ``flowrun-fit-cfm`` reuses the split ``prepare`` wrote.
+    """
+    design_split = designs.obs["split"].astype(str)
+    expected = design_split.reindex(cells.obs["design_id"].astype(str)).to_numpy()
+    if not np.array_equal(cells.obs["split"].astype(str).to_numpy(), expected) or design_split[target] != "test":
+        raise ValueError(
+            "The split in cells.zarr and designs.zarr is not the one `prepare` wrote; was a flow trained with "
+            "splitter.overwrite=true?"
+        )
+
+
+def _composition(cell_types: pd.Series, classes: list[str]) -> tuple[np.ndarray, float]:
+    """The fraction of ``cell_types`` in each of ``classes``, and the fraction in none of them.
+
+    The second is the mass of types only held-out designs show, which the classifier cannot predict.
+    """
+    fractions = cell_types.astype(str).value_counts(normalize=True).reindex(classes, fill_value=0.0)
+    return fractions.to_numpy(np.float32), float(1 - fractions.sum())
+
+
+def _responses(seed: int, **kwargs) -> tuple:
+    """The guiding, scoring and fresh ``SurrogateResponse``, seeded ``seed``, ``seed + 1`` and ``seed + 2``.
+
+    Designs are scored on other cells than the ones that guided them, and the best design is reported on other
+    cells than the ones that picked it.
+    """
+    from sckitflow.core.surrogate import SurrogateResponse
+
+    return tuple(SurrogateResponse(**kwargs, seed=seed + i) for i in range(3))
+
+
+def _score(response, x, potential_fn, ystar) -> tuple:
+    """Each design's potential and response, averaged over the context's groups and ``SCORE_DRAWS`` populations."""
+    import torch
+
+    with torch.no_grad():
+        ys = response.population_responses({DESIGN_KEY: x}, SCORE_DRAWS)
+    return potential_fn(ys, ystar).mean((0, 1)), ys.mean((0, 1))
+
+
+def _best(fresh, x, pot, potential_fn, ystar) -> float:
+    """The potential on ``fresh`` of the design with the lowest ``pot``."""
+    return float(_score(fresh, x[pot.argmin()][None], potential_fn, ystar)[0][0])
 
 
 def guide(
@@ -237,30 +286,42 @@ def guide(
     """Samples guided and unguided designs and writes ``designs.csv`` and ``summary.json`` to ``out_dir``.
 
     The surrogate generates ``n_cells`` cells per design to predict its response. The designs are guided with
-    one draw of those cells and scored on ``SCORE_DRAWS`` others, so the summary does not reward fitting the
-    guiding noise. Sampled designs are clipped to the training designs' range before they are scored, so each
-    row of ``designs.csv`` pairs its doses with their own potential. A "best" design is picked on the scoring
-    draws and its potential reported on ``SCORE_DRAWS`` fresh ones, so sets of different sizes compare fairly.
-    Distances are in the encoded space (z-scored log doses). ``n_steps`` and ``surrogate_steps`` default to the
-    trained models' own inference steps.
+    one draw of those cells (seed ``seed``) and scored on ``SCORE_DRAWS`` others (``seed + 1``), so the summary
+    does not reward fitting the guiding noise. Sampled designs are clipped to the training designs' range before
+    they are scored, so each row of ``designs.csv`` pairs its doses with their own potential. A set's "best" design
+    is picked on the scoring draws and its potential reported on ``SCORE_DRAWS`` fresh ones (``seed + 2``), so it
+    is not the luckiest draw; it is still a best of the set's size, which favours the training designs over
+    ``n_designs`` samples when there are more of them (each set's ``n_designs`` is in the summary). Distances are
+    in the encoded space (z-scored log doses). ``n_steps`` and ``surrogate_steps`` default to the trained models'
+    own inference steps. ``surrogate_dir`` and ``prior_dir`` are the runs' ``save`` folders.
     """
     import torch
+    from omegaconf import OmegaConf
     from sckitflow import Model
     from sckitflow.core.solvers import ODESolver
     from sckitflow.core.surrogate import (
         LossGuidedVelocity,
         PathFlowMap,
         SurrogatePotential,
-        SurrogateResponse,
         cross_entropy_probs,
         squared_error,
     )
     from sckitflow.data import FlowDataModule
 
+    if n_steps is not None and n_steps < 2:
+        raise ValueError(f"n_steps={n_steps}: the prior's ODE needs at least 2 time points.")
+    if n_cells < 1:
+        raise ValueError(f"n_cells={n_cells}: the surrogate needs at least one cell per design.")
+    for run in (surrogate_dir, prior_dir):
+        config = run / "config_resolved.yaml"
+        if config.exists() and OmegaConf.load(config).splitter.overwrite:
+            raise ValueError(f"{run} was trained with splitter.overwrite=true, not on the split `prepare` wrote.")
+
     device = "cuda" if torch.cuda.is_available() else "cpu"
     cells, designs = ad.read_zarr(data_dir / "cells.zarr"), ad.read_zarr(data_dir / "designs.zarr")
     encoding = json.loads(cells.uns["design_encoding"])
     target = str(encoding["target_design"])
+    _check_split(cells, designs, target)
 
     surrogate = Model.from_pretrained(surrogate_dir, cells)
     prior = Model.from_pretrained(prior_dir, designs)
@@ -270,49 +331,47 @@ def guide(
     # Generating from noise, the surrogate draws `n_samples` cells per design. The context only supplies one leaf;
     # its own design is replaced by the optimized one, so a single training cell is enough.
     update = {"n_samples": n_cells} | ({} if surrogate_steps is None else {"n_steps": surrogate_steps})
-    inferer.config = inferer.config.model_copy(update=update)
+    inferer.config = type(inferer.config).model_validate(inferer.config.model_dump() | update)
     context = cells[np.flatnonzero(cells.obs["split"] == "train")[:1]].copy()
     is_target = (cells.obs["design_id"] == target).to_numpy()
+    summary = {
+        "args": {
+            "n_designs": n_designs,
+            "n_steps": prior.inference_method.config.n_steps if n_steps is None else n_steps,
+            "scale": scale,
+            "max_strength": max_strength,
+            "n_cells": n_cells,
+            "surrogate_steps": inferer.config.n_steps,
+            "readout": readout,
+            "seed": seed,
+        },
+        "target_design": int(target),
+        "target_prefix": encoding["target_prefix"],
+        "target_observed_fraction": float(designs.obs.loc[target, "target_fraction"]),
+    }
     target_classes = None
     if readout == "classifier":
         classifier, classes = load_classifier(data_dir, device)
-        # ``ȳ*``: the target design's observed composition, from the cell types the classifier was trained on.
-        counts = cells.obs.loc[is_target, "cell_type"].astype(str).value_counts()
-        ystar = torch.tensor(
-            (counts.reindex(classes).fillna(0) / is_target.sum()).to_numpy(), dtype=torch.float32, device=device
-        )
+        # ``ȳ*``: the target design's observed composition over the classifier's classes
+        ystar, summary["target_unknown_mass"] = _composition(cells.obs.loc[is_target, "cell_type"], classes)
+        ystar = torch.as_tensor(ystar, device=device)
         target_classes = torch.as_tensor([c.startswith(encoding["target_prefix"]) for c in classes], device=device)
         readout_fn, potential_fn = (lambda c: classifier(c).softmax(-1)), cross_entropy_probs
     else:
         ystar = torch.tensor(np.asarray(cells.X[is_target]).mean(0), device=device)
         readout_fn, potential_fn = None, squared_error
-    response = SurrogateResponse(
+    guiding, scoring, fresh = _responses(
+        seed,
         inferer=inferer,
         datamodule=FlowDataModule.from_adata(context, surrogate.manager),
         adata=context,
         readout=readout_fn,
         require_target_state=False,
-        seed=seed,
     )
-    potential = SurrogatePotential(response, ystar=ystar, potential=potential_fn).to(device)
+    potential = SurrogatePotential(guiding, ystar=ystar, potential=potential_fn).to(device)
 
     def psi(x: torch.Tensor) -> torch.Tensor:
         return potential({DESIGN_KEY: x})
-
-    def score(x: torch.Tensor, fresh: bool = False) -> tuple[torch.Tensor, torch.Tensor]:
-        """Each design's potential and response, averaged over the context's groups and ``SCORE_DRAWS`` draws.
-
-        Population 0 is the guiding draw, 1 to ``SCORE_DRAWS`` the scoring ones and the next ``SCORE_DRAWS``
-        the fresh ones. The skipped populations are still generated: ``population_responses`` has no offset.
-        """
-        first = SCORE_DRAWS + 1 if fresh else 1
-        with torch.no_grad():
-            ys = response.population_responses({DESIGN_KEY: x}, first + SCORE_DRAWS)[first:]
-        return potential_fn(ys, ystar).mean((0, 1)), ys.mean((0, 1))
-
-    def best(x: torch.Tensor, pot: torch.Tensor) -> float:
-        """The fresh-draw potential of the design with the lowest scoring-draw potential."""
-        return float(score(x[pot.argmin()][None], fresh=True)[0][0])
 
     lo, hi = (torch.tensor(encode(np.asarray(encoding[k])[None], encoding)[0], device=device) for k in ("min", "max"))
 
@@ -323,43 +382,43 @@ def guide(
         device=device,
         dtype=torch.float32,
     )
-    time = torch.linspace(0, 1, prior.inference_method.config.n_steps if n_steps is None else n_steps, device=device)
-    method = prior.inference_method.config.solver_kwargs.get("method", "euler")
+    time = torch.linspace(0, 1, summary["args"]["n_steps"], device=device)
+    solver_kwargs = dict(prior.inference_method.config.solver_kwargs)
+    method = solver_kwargs.pop("method", "euler")
     guided = LossGuidedVelocity(
         prior.module, path, psi, flow_map=PathFlowMap(prior.module, path), scale=scale, max_strength=max_strength
     )
     samples = {
-        name: ODESolver(field, method=method, device_id=device).solve(x0, time).detach().clamp(lo, hi)
+        name: ODESolver(field, method=method, device_id=device)
+        .solve(x0, time, solver_kwargs=solver_kwargs)
+        .detach()
+        .clamp(lo, hi)
         for name, field in (("prior", prior.module), ("guided", guided))
     }
 
     target_x = torch.as_tensor(designs[target].X[0], device=device)
     train_x = torch.as_tensor(designs[designs.obs["split"] == "train"].X, device=device)
-    rows, summary = [], {"target_design": int(target), "scale": scale, "n_designs": n_designs, "readout": readout}
-    if target_classes is not None:  # the paper's headline number: the mass on the target's cell types
-        summary["target_prefix"] = encoding["target_prefix"]
-        summary["target_observed_fraction"] = float(ystar[target_classes].sum())
-
-    summary["target_predicted_potential"] = float(score(target_x[None])[0][0])
-    summary["train_potential_best"] = best(train_x, score(train_x)[0])
-    for name, x in samples.items():
-        pot, y = score(x)
+    summary["target_predicted_potential"] = float(_score(scoring, target_x[None], potential_fn, ystar)[0][0])
+    rows = []
+    for name, x in {"train": train_x, **samples}.items():
+        pot, y = _score(scoring, x, potential_fn, ystar)
         dist = torch.linalg.vector_norm(x - target_x, dim=-1)
-        nearest = torch.cdist(x, train_x).min(-1).values
         summary[name] = {
+            "n_designs": len(x),
             "potential_mean": float(pot.mean()),
-            "potential_best": best(x, pot),
+            "potential_best": _best(fresh, x, pot, potential_fn, ystar),
             "predicted_target_fraction": None
             if target_classes is None
             else float(y[..., target_classes].sum(-1).mean()),
             "dist_to_target_mean": float(dist.mean()),
             "dist_to_target_min": float(dist.min()),
-            "dist_to_nearest_train_mean": float(nearest.mean()),
+            "dist_to_nearest_train_mean": float(torch.cdist(x, train_x).min(-1).values.mean()),
         }
-        doses = decode(x.cpu().numpy(), encoding).assign(
-            kind=name, potential=pot.cpu().numpy(), dist_to_target=dist.cpu().numpy()
-        )
-        rows.append(doses)
+        if name != "train":
+            doses = decode(x.cpu().numpy(), encoding).assign(
+                kind=name, potential=pot.cpu().numpy(), dist_to_target_encoded=dist.cpu().numpy()
+            )
+            rows.append(doses)
     rows.append(designs.obs.loc[[target], encoding["columns"]].reset_index(drop=True).assign(kind="target"))
 
     out_dir.mkdir(parents=True, exist_ok=True)
