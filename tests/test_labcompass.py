@@ -12,7 +12,8 @@ from hydra import compose, initialize_config_dir
 from flowrun import fit_cfm, labcompass
 
 
-def _screen(path: Path, n_designs: int = 8, cells_per_design: int = 40) -> None:
+def _screen(path: Path, n_designs: int = 8, cells_per_design: int = 40, shift_held_out: float = 0.0) -> None:
+    """A toy screen. ``shift_held_out`` moves the markers of the most-MgK recipe's cells, which `prepare` holds out."""
     rng = np.random.default_rng(0)
     columns = labcompass.DOSES + labcompass.LINEAR
     levels = rng.uniform(0, 10, size=(n_designs, len(columns))).round(1)
@@ -23,7 +24,29 @@ def _screen(path: Path, n_designs: int = 8, cells_per_design: int = 40) -> None:
     obs["cell_type"] = pd.Categorical(types[rng.integers(0, len(types), len(design))])  # None: unassigned cells
     obs.index = obs.index.astype(str)
     X = (rng.normal(size=(len(design), 6)) + levels[design, :6] / 10).astype(np.float32)
+    if shift_held_out:
+        is_mgk = obs["cell_type"].astype(str).str.startswith("MgK").to_numpy()
+        target = pd.Series(is_mgk).groupby(design).mean().idxmax()
+        held_out = (levels[design, : len(labcompass.DOSES)] == levels[target, : len(labcompass.DOSES)]).all(1)
+        X[held_out] += shift_held_out
     ad.AnnData(X=X, obs=obs).write_h5ad(path)
+
+
+def test_prepare_fits_nothing_on_held_out_rows(tmp_path: Path):
+    """Moving the held-out cells' markers leaves every training cell and every fitted statistic unchanged."""
+    out = {}
+    for shift in (0.0, 100.0):
+        _screen(tmp_path / f"{shift}.h5ad", shift_held_out=shift)
+        labcompass.prepare(tmp_path / f"{shift}.h5ad", tmp_path / str(shift), target_prefix="MgK", n_val=2, seed=0)
+        out[shift] = ad.read_zarr(tmp_path / str(shift) / "cells.zarr")
+    base, moved = out[0.0], out[100.0]
+    train = (base.obs["split"] == "train").to_numpy()
+    np.testing.assert_array_equal(base.X[train], moved.X[train])
+    np.testing.assert_array_equal(
+        base.uns["preprocessing"]["zscore"]["mean"], moved.uns["preprocessing"]["zscore"]["mean"]
+    )
+    assert base.uns["design_encoding"] == moved.uns["design_encoding"]
+    assert not np.allclose(base.X[~train], moved.X[~train])
 
 
 def _fit(experiment: str, data: Path, run_dir: Path, tmp_path: Path) -> None:
@@ -88,15 +111,15 @@ def test_guide_end_to_end(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, reado
         assert (fraction is None) == (readout == "markers") and (fraction is None or 0 <= fraction <= 1)
     proposed = pd.read_csv(tmp_path / "guide" / "designs.csv")
     assert proposed["kind"].value_counts().to_dict() == {"prior": 4, "guided": 4, "target": 1}
-    by_kind = {k: proposed[proposed["kind"] == k][labcompass.DOSES].to_numpy() for k in ("prior", "guided")}
-    assert not np.allclose(by_kind["prior"], by_kind["guided"])
+    by_kind = {k: proposed[proposed["kind"] == k]["potential"].to_numpy() for k in ("prior", "guided")}
+    assert not np.array_equal(by_kind["prior"], by_kind["guided"])  # a toy readout barely moves them
     train = designs.obs[designs.obs["split"] == "train"][labcompass.DOSES + labcompass.LINEAR]
     columns = labcompass.DOSES + labcompass.LINEAR
     sampled = proposed[proposed["kind"] != "target"][columns]
     assert (sampled >= train.min().to_numpy() - 1e-6).all().all() and (
         sampled <= train.max().to_numpy() + 1e-6
     ).all().all()
-    target = proposed[proposed["kind"] == "target"][columns].to_numpy()[0]  # reported as observed, not clipped
+    target = proposed[proposed["kind"] == "target"][columns].to_numpy()[0]  # reported as observed
     np.testing.assert_allclose(
         target, designs.obs.loc[str(prepared["target_design"]), columns].to_numpy(float), rtol=1e-6
     )

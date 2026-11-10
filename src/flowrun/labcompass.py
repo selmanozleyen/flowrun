@@ -25,6 +25,8 @@ import numpy as np
 import pandas as pd
 from scipy import sparse
 
+from flowrun.preprocess import preprocess
+
 DESIGN_KEY = "design"
 UNASSIGNED = "unassigned"  # cells the screen left without a type: a class of its own, so ȳ(x) still sums to 1
 DOSES = [
@@ -59,7 +61,7 @@ def prepare(adata_path: Path, out_dir: Path, *, target_prefix: str, n_val: int, 
     """
     adata = ad.read_h5ad(adata_path, backed="r")
     obs = adata.obs
-    raw = pd.DataFrame({c: pd.to_numeric(obs[c].astype(str)) for c in DOSES + LINEAR}, index=obs.index)
+    raw = pd.DataFrame({c: pd.to_numeric(obs[c].astype(str), errors="coerce") for c in DOSES + LINEAR}, index=obs.index)
     if missing := [c for c in raw if raw[c].isna().any()]:
         raise ValueError(f"Design columns with missing or non-numeric values: {missing}.")
     design_id = raw.groupby(DOSES + LINEAR, sort=True).ngroup().to_numpy()
@@ -69,6 +71,8 @@ def prepare(adata_path: Path, out_dir: Path, *, target_prefix: str, n_val: int, 
     fraction = pd.Series(cell_type).str.startswith(target_prefix).groupby(design_id).mean()
     target = int(fraction.idxmax())
     same_recipe = (designs[DOSES] == designs.loc[target, DOSES]).all(axis=1)
+    if n_val > (~same_recipe).sum() - 1:
+        raise ValueError(f"n_val={n_val} leaves no training design: only {(~same_recipe).sum()} are not held out.")
     rng = np.random.default_rng(seed)
     val = rng.choice(designs.index[~same_recipe], size=n_val, replace=False)
     split = pd.Series("train", index=designs.index)
@@ -76,9 +80,9 @@ def prepare(adata_path: Path, out_dir: Path, *, target_prefix: str, n_val: int, 
     is_train = (split == "train").to_numpy()
     cell_split = split.to_numpy()[design_id]
 
-    encoded = np.concatenate([np.log1p(designs[DOSES].to_numpy()), designs[LINEAR].to_numpy()], axis=1)
-    mean, std = encoded[is_train].mean(0), encoded[is_train].std(0) + 1e-8
-    encoded = ((encoded - mean) / std).astype(np.float32)
+    logged = np.concatenate([np.log1p(designs[DOSES].to_numpy()), designs[LINEAR].to_numpy()], axis=1)
+    mean, std = logged[is_train].mean(0), logged[is_train].std(0)
+    std[std == 0] = 1  # a column constant over the training designs is only centred
     encoding = {
         "columns": DOSES + LINEAR,
         "log1p": [True] * len(DOSES) + [False] * len(LINEAR),
@@ -89,14 +93,16 @@ def prepare(adata_path: Path, out_dir: Path, *, target_prefix: str, n_val: int, 
         "target_design": target,
         "target_prefix": target_prefix,
     }
+    encoded = encode(designs.to_numpy(), encoding)
 
     X = adata.X[:]
     X = np.asarray(X.toarray() if sparse.issparse(X) else X, dtype=np.float32)
-    marker_mean, marker_std = X[cell_split == "train"].mean(0), X[cell_split == "train"].std(0) + 1e-8
+    var_names = adata.var_names.astype(str)
+    adata.file.close()
 
     out_dir.mkdir(parents=True, exist_ok=True)
     cells = ad.AnnData(
-        X=(X - marker_mean) / marker_std,
+        X=X,
         obs=pd.DataFrame(
             {
                 "design_id": pd.Categorical(design_id.astype(str)),
@@ -105,12 +111,15 @@ def prepare(adata_path: Path, out_dir: Path, *, target_prefix: str, n_val: int, 
             },
             index=obs.index.astype(str),
         ),
-        var=pd.DataFrame(index=adata.var_names.astype(str)),
+        var=pd.DataFrame(index=var_names),
         obsm={DESIGN_KEY: encoded[design_id]},
         uns={"design_encoding": json.dumps(encoding)},
     )
+    # z-scored on the training cells; `uns["preprocessing"]` maps generated cells back with `preprocess.inverse`
+    preprocess(cells, train_mask=cell_split == "train", zscore=True, key_added="zscored")
+    cells.X = cells.obsm.pop("zscored").astype(np.float32)
     _write(cells, out_dir / "cells.zarr")
-    design_obs = designs.rename(columns=str).assign(target_fraction=fraction, split=pd.Categorical(split.to_numpy()))
+    design_obs = designs.assign(target_fraction=fraction, split=pd.Categorical(split.to_numpy()))
     design_obs.index = design_obs.index.astype(str)
     designs_adata = ad.AnnData(
         X=encoded,
@@ -140,10 +149,10 @@ def fit_classifier(data_dir: Path, *, hidden: int, epochs: int, lr: float, seed:
 
     cells = ad.read_zarr(data_dir / "cells.zarr")
     labels = cells.obs["cell_type"].astype(str)  # `prepare` already named the unassigned cells
-    classes = sorted(labels.unique())
-    y_all = torch.as_tensor(pd.Index(classes).get_indexer(labels))
-    X_all = torch.as_tensor(np.asarray(cells.X, dtype=np.float32))
     split = cells.obs["split"].to_numpy()
+    classes = sorted(labels[split == "train"].unique())  # a type only held-out designs show is not learnable
+    y_all = torch.as_tensor(pd.Index(classes).get_indexer(labels))  # -1 for such a type
+    X_all = torch.as_tensor(np.asarray(cells.X, dtype=np.float32))
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
     torch.manual_seed(seed)
@@ -163,7 +172,8 @@ def fit_classifier(data_dir: Path, *, hidden: int, epochs: int, lr: float, seed:
     accuracy = {}
     with torch.no_grad():
         for name in ("train", "val", "test"):
-            Xs, ys = X_all[split == name].to(device), y_all[split == name].to(device)
+            rows = (split == name) & (y_all.numpy() >= 0)
+            Xs, ys = X_all[rows].to(device), y_all[rows].to(device)
             accuracy[f"{name}_accuracy"] = float((model(Xs).argmax(-1) == ys).float().mean()) if len(ys) else None
     torch.save(
         {"state_dict": model.state_dict(), "classes": classes, "hidden": hidden, "n_markers": cells.n_vars},
@@ -194,14 +204,19 @@ def load_classifier(data_dir: Path, device: str):
     return model.to(device).eval().requires_grad_(False), state["classes"]
 
 
+def encode(doses: np.ndarray, encoding: dict) -> np.ndarray:
+    """Maps doses to the encoded space: log1p of the dose columns, then z-scored on the training designs."""
+    x = np.where(encoding["log1p"], np.log1p(doses), doses)
+    return ((x - np.asarray(encoding["mean"])) / np.asarray(encoding["std"])).astype(np.float32)
+
+
 def decode(encoded: np.ndarray, encoding: dict) -> pd.DataFrame:
-    """Maps encoded designs back to doses, clipped to the range of the training designs."""
+    """Maps encoded designs back to doses; the inverse of `encode`."""
     x = encoded * np.asarray(encoding["std"]) + np.asarray(encoding["mean"])
-    x = np.where(encoding["log1p"], np.expm1(x), x).clip(encoding["min"], encoding["max"])
-    return pd.DataFrame(x, columns=encoding["columns"])
+    return pd.DataFrame(np.where(encoding["log1p"], np.expm1(x), x), columns=encoding["columns"])
 
 
-SCORE_DRAWS = 4  # independent populations the summary scores each design on, apart from the guiding one
+SCORE_DRAWS = 4  # independent populations each design is scored on, apart from the guiding one
 
 
 def guide(
@@ -223,7 +238,11 @@ def guide(
 
     The surrogate generates ``n_cells`` cells per design to predict its response. The designs are guided with
     one draw of those cells and scored on ``SCORE_DRAWS`` others, so the summary does not reward fitting the
-    guiding noise. ``n_steps`` and ``surrogate_steps`` default to the trained models' own inference steps.
+    guiding noise. Sampled designs are clipped to the training designs' range before they are scored, so each
+    row of ``designs.csv`` pairs its doses with their own potential. A "best" design is picked on the scoring
+    draws and its potential reported on ``SCORE_DRAWS`` fresh ones, so sets of different sizes compare fairly.
+    Distances are in the encoded space (z-scored log doses). ``n_steps`` and ``surrogate_steps`` default to the
+    trained models' own inference steps.
     """
     import torch
     from sckitflow import Model
@@ -259,13 +278,13 @@ def guide(
         classifier, classes = load_classifier(data_dir, device)
         # ``ȳ*``: the target design's observed composition, from the cell types the classifier was trained on.
         counts = cells.obs.loc[is_target, "cell_type"].astype(str).value_counts()
-        ystar = torch.as_tensor(
+        ystar = torch.tensor(
             (counts.reindex(classes).fillna(0) / is_target.sum()).to_numpy(), dtype=torch.float32, device=device
         )
         target_classes = torch.as_tensor([c.startswith(encoding["target_prefix"]) for c in classes], device=device)
         readout_fn, potential_fn = (lambda c: classifier(c).softmax(-1)), cross_entropy_probs
     else:
-        ystar = torch.as_tensor(cells.X[is_target].mean(0), device=device)
+        ystar = torch.tensor(np.asarray(cells.X[is_target]).mean(0), device=device)
         readout_fn, potential_fn = None, squared_error
     response = SurrogateResponse(
         inferer=inferer,
@@ -280,11 +299,22 @@ def guide(
     def psi(x: torch.Tensor) -> torch.Tensor:
         return potential({DESIGN_KEY: x})
 
-    def score(x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
-        """Each design's potential and response, averaged over the scoring draws and the context's groups."""
+    def score(x: torch.Tensor, fresh: bool = False) -> tuple[torch.Tensor, torch.Tensor]:
+        """Each design's potential and response, averaged over the context's groups and ``SCORE_DRAWS`` draws.
+
+        Population 0 is the guiding draw, 1 to ``SCORE_DRAWS`` the scoring ones and the next ``SCORE_DRAWS``
+        the fresh ones. The skipped populations are still generated: ``population_responses`` has no offset.
+        """
+        first = SCORE_DRAWS + 1 if fresh else 1
         with torch.no_grad():
-            ys = response.population_responses({DESIGN_KEY: x}, SCORE_DRAWS + 1)[1:]  # 0 is the guiding draw
+            ys = response.population_responses({DESIGN_KEY: x}, first + SCORE_DRAWS)[first:]
         return potential_fn(ys, ystar).mean((0, 1)), ys.mean((0, 1))
+
+    def best(x: torch.Tensor, pot: torch.Tensor) -> float:
+        """The fresh-draw potential of the design with the lowest scoring-draw potential."""
+        return float(score(x[pot.argmin()][None], fresh=True)[0][0])
+
+    lo, hi = (torch.tensor(encode(np.asarray(encoding[k])[None], encoding)[0], device=device) for k in ("min", "max"))
 
     path = prior.inference_method.probability_path
     x0 = prior.inference_method.noise_sampler(
@@ -293,12 +323,13 @@ def guide(
         device=device,
         dtype=torch.float32,
     )
-    time = torch.linspace(0, 1, n_steps or prior.inference_method.config.n_steps, device=device)
+    time = torch.linspace(0, 1, prior.inference_method.config.n_steps if n_steps is None else n_steps, device=device)
+    method = prior.inference_method.config.solver_kwargs.get("method", "euler")
     guided = LossGuidedVelocity(
         prior.module, path, psi, flow_map=PathFlowMap(prior.module, path), scale=scale, max_strength=max_strength
     )
     samples = {
-        name: ODESolver(field, device_id=device).solve(x0, time).detach()
+        name: ODESolver(field, method=method, device_id=device).solve(x0, time).detach().clamp(lo, hi)
         for name, field in (("prior", prior.module), ("guided", guided))
     }
 
@@ -309,15 +340,15 @@ def guide(
         summary["target_prefix"] = encoding["target_prefix"]
         summary["target_observed_fraction"] = float(ystar[target_classes].sum())
 
-    summary["target_potential"] = float(score(target_x[None])[0][0])
-    summary["train_potential_best"] = float(score(train_x)[0].min())
+    summary["target_predicted_potential"] = float(score(target_x[None])[0][0])
+    summary["train_potential_best"] = best(train_x, score(train_x)[0])
     for name, x in samples.items():
         pot, y = score(x)
         dist = torch.linalg.vector_norm(x - target_x, dim=-1)
         nearest = torch.cdist(x, train_x).min(-1).values
         summary[name] = {
             "potential_mean": float(pot.mean()),
-            "potential_best": float(pot.min()),
+            "potential_best": best(x, pot),
             "predicted_target_fraction": None
             if target_classes is None
             else float(y[..., target_classes].sum(-1).mean()),
