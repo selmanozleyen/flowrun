@@ -20,7 +20,7 @@ training:
 inference:
   generate_from_noise: true
   n_steps: 20
-  n_samples: 1          # cells per design at evaluation; `flowrun-labcompass guide --n-cells` sets its own
+  n_samples: 1          # cells generated per observed cell at evaluation; `guide --n-cells` sets its own per design
 
 module:
   condition_encoder:

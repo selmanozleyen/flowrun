@@ -23,6 +23,7 @@ from pathlib import Path
 import anndata as ad
 import numpy as np
 import pandas as pd
+from scipy import sparse
 
 DESIGN_KEY = "design"
 UNASSIGNED = "unassigned"  # cells the screen left without a type: a class of its own, so ȳ(x) still sums to 1
@@ -50,37 +51,48 @@ def _write(adata: ad.AnnData, path: Path) -> None:
 
 
 def prepare(adata_path: Path, out_dir: Path, *, target_prefix: str, n_val: int, seed: int) -> dict:
-    """Writes ``cells.zarr`` and ``designs.zarr`` to ``out_dir`` and returns the encoding summary."""
+    """Writes ``cells.zarr`` and ``designs.zarr`` to ``out_dir`` and returns the encoding summary.
+
+    The target is the design with the largest fraction of ``target_prefix`` cell types. It and every design with
+    the same doses, the same recipe at another day or O2 level, are held out as "test", so a prior or surrogate
+    never trained on its recipe. ``n_val`` other designs are "val". Every normalisation is fit on the training rows.
+    """
     adata = ad.read_h5ad(adata_path, backed="r")
     obs = adata.obs
     raw = pd.DataFrame({c: pd.to_numeric(obs[c].astype(str)) for c in DOSES + LINEAR}, index=obs.index)
+    if missing := [c for c in raw if raw[c].isna().any()]:
+        raise ValueError(f"Design columns with missing or non-numeric values: {missing}.")
     design_id = raw.groupby(DOSES + LINEAR, sort=True).ngroup().to_numpy()
-
     designs = raw.groupby(design_id).first()
-    encoded = np.concatenate([np.log1p(designs[DOSES].to_numpy()), designs[LINEAR].to_numpy()], axis=1)
-    mean, std = encoded.mean(0), encoded.std(0) + 1e-8
-    encoded = ((encoded - mean) / std).astype(np.float32)
 
     cell_type = obs["cell_type"].astype(object).fillna(UNASSIGNED).astype(str).to_numpy()
     fraction = pd.Series(cell_type).str.startswith(target_prefix).groupby(design_id).mean()
     target = int(fraction.idxmax())
+    same_recipe = (designs[DOSES] == designs.loc[target, DOSES]).all(axis=1)
     rng = np.random.default_rng(seed)
-    val = rng.choice(np.setdiff1d(designs.index, [target]), size=n_val, replace=False)
+    val = rng.choice(designs.index[~same_recipe], size=n_val, replace=False)
     split = pd.Series("train", index=designs.index)
-    split[val], split[target] = "val", "test"
+    split[val], split[same_recipe] = "val", "test"
+    is_train = (split == "train").to_numpy()
+    cell_split = split.to_numpy()[design_id]
 
-    X = np.asarray(adata.X[:], dtype=np.float32)
-    marker_mean, marker_std = X.mean(0), X.std(0) + 1e-8
+    encoded = np.concatenate([np.log1p(designs[DOSES].to_numpy()), designs[LINEAR].to_numpy()], axis=1)
+    mean, std = encoded[is_train].mean(0), encoded[is_train].std(0) + 1e-8
+    encoded = ((encoded - mean) / std).astype(np.float32)
     encoding = {
         "columns": DOSES + LINEAR,
         "log1p": [True] * len(DOSES) + [False] * len(LINEAR),
         "mean": mean.tolist(),
         "std": std.tolist(),
-        "marker_mean": marker_mean.tolist(),
-        "marker_std": marker_std.tolist(),
+        "min": designs[is_train].min().tolist(),
+        "max": designs[is_train].max().tolist(),
         "target_design": target,
         "target_prefix": target_prefix,
     }
+
+    X = adata.X[:]
+    X = np.asarray(X.toarray() if sparse.issparse(X) else X, dtype=np.float32)
+    marker_mean, marker_std = X[cell_split == "train"].mean(0), X[cell_split == "train"].std(0) + 1e-8
 
     out_dir.mkdir(parents=True, exist_ok=True)
     cells = ad.AnnData(
@@ -89,7 +101,7 @@ def prepare(adata_path: Path, out_dir: Path, *, target_prefix: str, n_val: int, 
             {
                 "design_id": pd.Categorical(design_id.astype(str)),
                 "cell_type": pd.Categorical(cell_type),
-                "split": pd.Categorical(split.to_numpy()[design_id]),
+                "split": pd.Categorical(cell_split),
             },
             index=obs.index.astype(str),
         ),
@@ -113,6 +125,7 @@ def prepare(adata_path: Path, out_dir: Path, *, target_prefix: str, n_val: int, 
         "target_design": target,
         "target_fraction": float(fraction[target]),
         "max_train_fraction": float(fraction[split == "train"].max()),
+        "test_designs": sorted(int(d) for d in designs.index[same_recipe]),
         "val_designs": sorted(int(v) for v in val),
     }
 
@@ -126,18 +139,17 @@ def fit_classifier(data_dir: Path, *, hidden: int, epochs: int, lr: float, seed:
     import torch
 
     cells = ad.read_zarr(data_dir / "cells.zarr")
-    labels = cells.obs["cell_type"].astype(object).fillna(UNASSIGNED).astype(str)
+    labels = cells.obs["cell_type"].astype(str)  # `prepare` already named the unassigned cells
     classes = sorted(labels.unique())
     y_all = torch.as_tensor(pd.Index(classes).get_indexer(labels))
     X_all = torch.as_tensor(np.asarray(cells.X, dtype=np.float32))
-    is_train = (cells.obs["split"] == "train").to_numpy()
+    split = cells.obs["split"].to_numpy()
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
     torch.manual_seed(seed)
     model = _classifier_module(cells.n_vars, len(classes), hidden).to(device)
     opt = torch.optim.Adam(model.parameters(), lr=lr)
-    X, y = X_all[is_train].to(device), y_all[is_train].to(device)
-    Xv, yv = X_all[~is_train].to(device), y_all[~is_train].to(device)
+    X, y = X_all[split == "train"].to(device), y_all[split == "train"].to(device)
     generator = torch.Generator(device=device).manual_seed(seed)
     for _ in range(epochs):
         perm = torch.randperm(len(X), device=device, generator=generator)
@@ -148,16 +160,16 @@ def fit_classifier(data_dir: Path, *, hidden: int, epochs: int, lr: float, seed:
             loss.backward()
             opt.step()
     model.eval()
+    accuracy = {}
     with torch.no_grad():
-        acc = {
-            "train_accuracy": float((model(X).argmax(-1) == y).float().mean()),
-            "heldout_accuracy": float((model(Xv).argmax(-1) == yv).float().mean()),
-        }
+        for name in ("train", "val", "test"):
+            Xs, ys = X_all[split == name].to(device), y_all[split == name].to(device)
+            accuracy[f"{name}_accuracy"] = float((model(Xs).argmax(-1) == ys).float().mean()) if len(ys) else None
     torch.save(
         {"state_dict": model.state_dict(), "classes": classes, "hidden": hidden, "n_markers": cells.n_vars},
         data_dir / "classifier.pt",
     )
-    return {"n_classes": len(classes), "epochs": epochs, **acc}
+    return {"n_classes": len(classes), "epochs": epochs, **accuracy}
 
 
 def _classifier_module(n_markers: int, n_classes: int, hidden: int):
@@ -182,18 +194,14 @@ def load_classifier(data_dir: Path, device: str):
     return model.to(device).eval().requires_grad_(False), state["classes"]
 
 
-def classifier_readout(cells, classifier):
-    """The paper's readout ``h``: each generated cell's cell-type probabilities."""
-    import torch
-
-    return torch.softmax(classifier(cells), dim=-1)
-
-
 def decode(encoded: np.ndarray, encoding: dict) -> pd.DataFrame:
-    """Maps encoded designs back to doses (negative doses are clipped to 0)."""
+    """Maps encoded designs back to doses, clipped to the range of the training designs."""
     x = encoded * np.asarray(encoding["std"]) + np.asarray(encoding["mean"])
-    x = np.where(encoding["log1p"], np.expm1(x).clip(min=0), x)
+    x = np.where(encoding["log1p"], np.expm1(x), x).clip(encoding["min"], encoding["max"])
     return pd.DataFrame(x, columns=encoding["columns"])
+
+
+SCORE_DRAWS = 4  # independent populations the summary scores each design on, apart from the guiding one
 
 
 def guide(
@@ -203,21 +211,20 @@ def guide(
     out_dir: Path,
     *,
     n_designs: int,
-    n_steps: int,
+    n_steps: int | None,
     scale: float,
     max_strength: float,
     n_cells: int,
-    surrogate_steps: int,
+    surrogate_steps: int | None,
     readout: str,
     seed: int,
 ) -> dict:
     """Samples guided and unguided designs and writes ``designs.csv`` and ``summary.json`` to ``out_dir``.
 
     The surrogate generates ``n_cells`` cells per design to predict its response. The designs are guided with
-    one draw of those cells and scored with another, so the summary does not reward fitting the guiding noise.
+    one draw of those cells and scored on ``SCORE_DRAWS`` others, so the summary does not reward fitting the
+    guiding noise. ``n_steps`` and ``surrogate_steps`` default to the trained models' own inference steps.
     """
-    from functools import partial
-
     import torch
     from sckitflow import Model
     from sckitflow.core.solvers import ODESolver
@@ -241,45 +248,43 @@ def guide(
     for model in (surrogate, prior):
         model.module.to(device).eval().requires_grad_(False)
     inferer = surrogate.inference_method
-    # Generating from noise, the surrogate draws `n_samples` cells per design, and nothing of the context's cells
-    # but their single leaf: one training cell is enough. The target is the held-out design's own response.
-    inferer.config = inferer.config.model_copy(update={"n_steps": surrogate_steps, "n_samples": n_cells})
+    # Generating from noise, the surrogate draws `n_samples` cells per design. The context only supplies one leaf;
+    # its own design is replaced by the optimized one, so a single training cell is enough.
+    update = {"n_samples": n_cells} | ({} if surrogate_steps is None else {"n_steps": surrogate_steps})
+    inferer.config = inferer.config.model_copy(update=update)
     context = cells[np.flatnonzero(cells.obs["split"] == "train")[:1]].copy()
     is_target = (cells.obs["design_id"] == target).to_numpy()
+    target_classes = None
     if readout == "classifier":
         classifier, classes = load_classifier(data_dir, device)
         # ``ȳ*``: the target design's observed composition, from the cell types the classifier was trained on.
-        counts = cells.obs.loc[is_target, "cell_type"].astype(object).fillna(UNASSIGNED).astype(str).value_counts()
+        counts = cells.obs.loc[is_target, "cell_type"].astype(str).value_counts()
         ystar = torch.as_tensor(
             (counts.reindex(classes).fillna(0) / is_target.sum()).to_numpy(), dtype=torch.float32, device=device
         )
-        readout_fn, potential_fn = partial(classifier_readout, classifier=classifier), cross_entropy_probs
+        target_classes = torch.as_tensor([c.startswith(encoding["target_prefix"]) for c in classes], device=device)
+        readout_fn, potential_fn = (lambda c: classifier(c).softmax(-1)), cross_entropy_probs
     else:
         ystar = torch.as_tensor(cells.X[is_target].mean(0), device=device)
         readout_fn, potential_fn = None, squared_error
-    datamodule = FlowDataModule.from_adata(context, surrogate.manager, n_train_steps=1, batch_size=1)
-
-    def response(response_seed: int) -> SurrogateResponse:
-        return SurrogateResponse(
-            inferer=inferer,
-            datamodule=datamodule,
-            adata=context,
-            readout=readout_fn,
-            require_target_state=False,
-            seed=response_seed,
-        )
-
-    potential = SurrogatePotential(response(seed), ystar=ystar, potential=potential_fn).to(device)
-    scoring = response(seed + 1)
+    response = SurrogateResponse(
+        inferer=inferer,
+        datamodule=FlowDataModule.from_adata(context, surrogate.manager),
+        adata=context,
+        readout=readout_fn,
+        require_target_state=False,
+        seed=seed,
+    )
+    potential = SurrogatePotential(response, ystar=ystar, potential=potential_fn).to(device)
 
     def psi(x: torch.Tensor) -> torch.Tensor:
         return potential({DESIGN_KEY: x})
 
     def score(x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
-        """Each design's potential and response under the scoring draw, averaged over the context's groups."""
+        """Each design's potential and response, averaged over the scoring draws and the context's groups."""
         with torch.no_grad():
-            y = scoring({DESIGN_KEY: x})
-        return potential_fn(y, ystar).mean(0), y.mean(0)
+            ys = response.population_responses({DESIGN_KEY: x}, SCORE_DRAWS + 1)[1:]  # 0 is the guiding draw
+        return potential_fn(ys, ystar).mean((0, 1)), ys.mean((0, 1))
 
     path = prior.inference_method.probability_path
     x0 = prior.inference_method.noise_sampler(
@@ -288,34 +293,34 @@ def guide(
         device=device,
         dtype=torch.float32,
     )
-    time = torch.linspace(0, 1, n_steps, device=device)
-    samples = {}
-    for name, s in (("prior", 0.0), ("guided", scale)):
-        field = LossGuidedVelocity(
-            prior.module, path, psi, flow_map=PathFlowMap(prior.module, path), scale=s, max_strength=max_strength
-        )
-        samples[name] = ODESolver(field, device_id=device).solve(x0, time).detach()
+    time = torch.linspace(0, 1, n_steps or prior.inference_method.config.n_steps, device=device)
+    guided = LossGuidedVelocity(
+        prior.module, path, psi, flow_map=PathFlowMap(prior.module, path), scale=scale, max_strength=max_strength
+    )
+    samples = {
+        name: ODESolver(field, device_id=device).solve(x0, time).detach()
+        for name, field in (("prior", prior.module), ("guided", guided))
+    }
 
     target_x = torch.as_tensor(designs[target].X[0], device=device)
     train_x = torch.as_tensor(designs[designs.obs["split"] == "train"].X, device=device)
     rows, summary = [], {"target_design": int(target), "scale": scale, "n_designs": n_designs, "readout": readout}
-    # For the classifier readout: the predicted mass on the target's dominant type, the paper's headline number.
-    top = int(ystar.argmax()) if readout == "classifier" else None
-    if top is not None:
-        summary["target_type"] = classes[top]
-        summary["target_type_observed_fraction"] = float(ystar[top])
+    if target_classes is not None:  # the paper's headline number: the mass on the target's cell types
+        summary["target_prefix"] = encoding["target_prefix"]
+        summary["target_observed_fraction"] = float(ystar[target_classes].sum())
 
     summary["target_potential"] = float(score(target_x[None])[0][0])
-    summary["train_potential_min"] = float(score(train_x)[0].min())
+    summary["train_potential_best"] = float(score(train_x)[0].min())
     for name, x in samples.items():
         pot, y = score(x)
-        frac = None if top is None else float(y[..., top].mean())
         dist = torch.linalg.vector_norm(x - target_x, dim=-1)
         nearest = torch.cdist(x, train_x).min(-1).values
         summary[name] = {
             "potential_mean": float(pot.mean()),
-            "potential_min": float(pot.min()),
-            "predicted_target_type_fraction": frac,
+            "potential_best": float(pot.min()),
+            "predicted_target_fraction": None
+            if target_classes is None
+            else float(y[..., target_classes].sum(-1).mean()),
             "dist_to_target_mean": float(dist.mean()),
             "dist_to_target_min": float(dist.min()),
             "dist_to_nearest_train_mean": float(nearest.mean()),
@@ -324,7 +329,7 @@ def guide(
             kind=name, potential=pot.cpu().numpy(), dist_to_target=dist.cpu().numpy()
         )
         rows.append(doses)
-    rows.append(decode(target_x[None].cpu().numpy(), encoding).assign(kind="target"))
+    rows.append(designs.obs.loc[[target], encoding["columns"]].reset_index(drop=True).assign(kind="target"))
 
     out_dir.mkdir(parents=True, exist_ok=True)
     pd.concat(rows, ignore_index=True).to_csv(out_dir / "designs.csv", index=False)
@@ -334,30 +339,33 @@ def guide(
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    sub = parser.add_subparsers(dest="command", required=True)
+    sub = parser.add_subparsers(required=True)
     p = sub.add_parser("prepare", help="encode designs and markers, write cells.zarr and designs.zarr")
-    p.add_argument("adata", type=Path)
+    p.set_defaults(func=prepare)
+    p.add_argument("adata_path", type=Path)
     p.add_argument("out_dir", type=Path)
     p.add_argument("--target-prefix", default="MgK", help="cell types whose fraction picks the target design")
     p.add_argument("--n-val", type=int, default=5)
     p.add_argument("--seed", type=int, default=0)
     c = sub.add_parser("fit-classifier", help="train the cell-type readout on the prepared cells")
+    c.set_defaults(func=fit_classifier)
     c.add_argument("data_dir", type=Path)
     c.add_argument("--hidden", type=int, default=128)
     c.add_argument("--epochs", type=int, default=10)
     c.add_argument("--lr", type=float, default=1e-3)
     c.add_argument("--seed", type=int, default=0)
     g = sub.add_parser("guide", help="sample guided and prior designs")
+    g.set_defaults(func=guide)
     g.add_argument("data_dir", type=Path)
     g.add_argument("surrogate_dir", type=Path)
     g.add_argument("prior_dir", type=Path)
     g.add_argument("out_dir", type=Path)
     g.add_argument("--n-designs", type=int, default=64)
-    g.add_argument("--n-steps", type=int, default=50, help="time points of the prior's ODE, n_steps - 1 Euler steps")
+    g.add_argument("--n-steps", type=int, help="time points of the prior's ODE; defaults to the prior's own")
     g.add_argument("--scale", type=float, default=1.0)
     g.add_argument("--max-strength", type=float, default=10.0)
     g.add_argument("--n-cells", type=int, default=256, help="cells the surrogate generates per design")
-    g.add_argument("--surrogate-steps", type=int, default=20, help="ODE steps of the surrogate inside guidance")
+    g.add_argument("--surrogate-steps", type=int, help="ODE steps of the surrogate; defaults to its own")
     g.add_argument(
         "--readout",
         choices=("classifier", "markers"),
@@ -367,16 +375,7 @@ def main() -> None:
     )
     g.add_argument("--seed", type=int, default=0)
     args = vars(parser.parse_args())
-    command = args.pop("command")
-    if command == "prepare":
-        result = prepare(args.pop("adata"), args.pop("out_dir"), **args)
-    elif command == "fit-classifier":
-        result = fit_classifier(args.pop("data_dir"), **args)
-    else:
-        result = guide(
-            args.pop("data_dir"), args.pop("surrogate_dir"), args.pop("prior_dir"), args.pop("out_dir"), **args
-        )
-    print(json.dumps(result, indent=2))
+    print(json.dumps(args.pop("func")(**args), indent=2))
 
 
 if __name__ == "__main__":
