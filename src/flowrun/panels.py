@@ -5,9 +5,9 @@ for synonyms such as ``EPCR`` / ``CD201``; the original names stay in ``var["ori
 ``obs[label_key]``, the labels' one-hot table in ``uns[label_key]`` (sorted label order) and these steps in
 ``uns["panels"]``. No split and no transform: ``fit_cfm`` splits and writes ``obs["split_<seed>"]`` back.
 
-:func:`from_state` runs in ``fit_cfm``: a ``datamanager`` state given as ``layers/<key>`` (or ``X``), and the coupling
-terms declared from it (``lin_from_state``: the features every file measures, by name, sorted; ``quad_from_state``:
-each file's own features, sorted), become the in-memory ``obsm`` reps sckitflow reads.
+:func:`from_state` runs in ``fit_cfm``: the coupling terms declared from a state given as ``layers.<key>`` (or ``X``)
+(``lin_from_state``: the features every file measures, by name, sorted; ``quad_from_state``: each file's own
+features, sorted) become the in-memory ``obsm`` reps sckitflow reads. The state itself goes to sckitflow as is.
 
 These follow Lorenzo's ``prepare_panel_adata_nosplit.py`` (theislab/sckitflow#202), plus the renames and the state.
 
@@ -24,6 +24,7 @@ from pathlib import Path
 import anndata as ad
 import numpy as np
 import pandas as pd
+from anndata.acc import A
 
 
 def prepare_panels(
@@ -44,42 +45,36 @@ def prepare_panels(
         a.uns["panels"] = {"panel": label, "label_key": label_key, "rename": dict(rename)}
 
 
-_STATE, _SHARED, _OWN = "state_from_layer", "shared_features", "own_features"
+_SHARED, _OWN = "shared_features", "own_features"
 
 
-def _state_values(a: ad.AnnData, loc: str | None) -> np.ndarray:
-    if loc in (None, "X"):
-        return np.asarray(a.X[:], dtype=np.float32)
-    return np.asarray(a.layers[loc.removeprefix("layers/")][:], dtype=np.float32)
+def _state_values(a: ad.AnnData, rep: str) -> np.ndarray:
+    """The rep ``rep`` (``"X"``, ``"layers.<k>"`` or ``"obsm.<k>"``) of ``a`` as float32, read into memory."""
+    return np.asarray(A.resolve(rep, vec=False).get(a)[:], dtype=np.float32)
 
 
 def from_state(adatas: Sequence[ad.AnnData], datamanager: Mapping) -> tuple[dict, dict | None]:
-    """The ``datamanager`` config sckitflow takes, with ``layers/`` states and the from-state coupling terms resolved.
+    """The ``datamanager`` config sckitflow takes, with the coupling terms declared from the state resolved.
 
-    Adds the reps to each file's ``obsm``, in memory. Returns the config and, when coupling terms were derived, the
-    shared and per-file own features.
+    ``lin_from_state`` takes the features every file measures, by name, sorted; ``quad_from_state`` each file's own
+    features, sorted. Each file's columns differ, so no single rep names them: they are added to each file's
+    ``obsm``, in memory. Returns the config and, when coupling terms were derived, the shared and per-file own
+    features.
     """
     dm = dict(datamanager)
     lin, quad = dm.pop("lin_from_state", False), dm.pop("quad_from_state", False)
+    if not (lin or quad):
+        return dm, None
     target, source = dm.get("target_sample_rep"), dm.get("source_sample_rep")
-    named = target in (None, "X") or str(target).startswith("layers/")
-    if (lin or quad) and (not named or source not in (None, target)):
+    if not (target == "X" or str(target).startswith("layers.")) or source not in (None, target):
         raise ValueError(
-            "lin_from_state / quad_from_state take the features by name, so the state must be `X` or `layers/<key>`, "
+            "lin_from_state / quad_from_state take the features by name, so the state must be `X` or `layers.<key>`, "
             f"the same for sources and targets; got target_sample_rep={target!r}, source_sample_rep={source!r}."
         )
     if lin and dm.get("rep_lin") is not None:
         raise ValueError("Set either rep_lin or lin_from_state, not both.")
     if quad and (dm.get("source_rep_quad") is not None or dm.get("target_rep_quad") is not None):
         raise ValueError("Set either source_rep_quad / target_rep_quad or quad_from_state, not both.")
-    if str(target).startswith("layers/"):
-        for a in adatas:
-            a.obsm[_STATE] = _state_values(a, target)
-        dm["target_sample_rep"] = _STATE
-        if source == target:
-            dm["source_sample_rep"] = _STATE
-    if not (lin or quad):
-        return dm, None
 
     names = [list(a.var_names) for a in adatas]
     shared = sorted(set(names[0]).intersection(*names[1:]))
@@ -94,9 +89,9 @@ def from_state(adatas: Sequence[ad.AnnData], datamanager: Mapping) -> tuple[dict
         if quad:
             a.obsm[_OWN] = values[:, [col[v] for v in own[-1]]]
     if lin:
-        dm["rep_lin"] = _SHARED
+        dm["rep_lin"] = f"obsm.{_SHARED}"
     if quad:
-        dm["source_rep_quad"] = dm["target_rep_quad"] = _OWN
+        dm["source_rep_quad"] = dm["target_rep_quad"] = f"obsm.{_OWN}"
     return dm, {"shared": shared, "own": own}
 
 
