@@ -20,10 +20,9 @@ from scipy.stats import ks_2samp, multivariate_normal
 from sklearn.mixture import GaussianMixture
 
 sys.path.insert(0, str(Path(__file__).parent))
-from diagnose import FOCUS, energy_distance, plot
-
-from flowrun.fit_cfm import enable_zarrs, read_inputs
-from flowrun.panels import _state_values, from_state
+from diagnose import FOCUS, energy_distance, plot  # noqa: E402
+from flowrun.fit_cfm import enable_zarrs, read_inputs  # noqa: E402
+from flowrun.panels import _state_values, from_state  # noqa: E402
 
 
 def quantile_match(x: np.ndarray, reference: np.ndarray, n_q: int = 1001) -> np.ndarray:
@@ -107,15 +106,9 @@ def main() -> None:
             gen = gmm.sample(len(rows))[0][rng.permutation(len(rows))]
         ks = {m: ks_2samp(gen[:, j], real[:, j]).statistic for j, m in enumerate(markers)}
         ks_rows += [{"setting": name, "marker": m, "ks": v, "shared": m in shared} for m, v in ks.items()]
-        results.append(
-            {
-                "setting": name,
-                "K": K,
-                "edist": energy_distance(gen, real),
-                "mean_ks": float(np.mean(list(ks.values()))),
-                "mean_ks_new_only": float(np.mean([ks[markers[j]] for j in n_idx])),
-            }
-        )
+        results.append({"setting": name, "K": K, "edist": energy_distance(gen, real),
+                        "mean_ks": float(np.mean(list(ks.values()))),
+                        "mean_ks_new_only": float(np.mean([ks[markers[j]] for j in n_idx]))})
         print(json.dumps(results[-1]), flush=True)
         plot(f"{name} (K={K})", gen, real, source_all[rows], markers, shared, src_idx, out / f"markers_{name}.png")
     table = pd.DataFrame(ks_rows).pivot(index="marker", columns="setting", values="ks")

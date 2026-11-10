@@ -80,17 +80,15 @@ def main() -> None:
     rows = []
     for i, j in enumerate(n_idx):
         t = n_test[:, i]
-        rows.append(
-            {
-                "marker": markers[j],
-                "R2 gmm mean": r2_score(t, gmm_mean[:, i]),
-                "R2 knn": r2_score(t, knn[:, i]),
-                "R2 linear": r2_score(t, lin[:, i]),
-                "r gmm mean": pearsonr(t, gmm_mean[:, i]).statistic,
-                "r gmm sample": pearsonr(t, gmm_sample[:, i]).statistic,
-                "KS gmm sample": ks_2samp(t, gmm_sample[:, i]).statistic,
-            }
-        )
+        rows.append({
+            "marker": markers[j],
+            "R2 gmm mean": r2_score(t, gmm_mean[:, i]),
+            "R2 knn": r2_score(t, knn[:, i]),
+            "R2 linear": r2_score(t, lin[:, i]),
+            "r gmm mean": pearsonr(t, gmm_mean[:, i]).statistic,
+            "r gmm sample": pearsonr(t, gmm_sample[:, i]).statistic,
+            "KS gmm sample": ks_2samp(t, gmm_sample[:, i]).statistic,
+        })
     table = pd.DataFrame(rows).set_index("marker").sort_values("R2 gmm mean")
     table.loc["mean"] = table.mean()
     table.to_csv(out / "percell_new_only.csv")
