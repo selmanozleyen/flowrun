@@ -252,6 +252,9 @@ cupy-cuda12 = [
 cupy-cuda13 = [
     { name = "cupy-cuda13x", extra = ["ctk"], marker = "(extra == 'extra-7-flowrun-cpu' and extra == 'extra-7-flowrun-cu126') or (extra != 'extra-7-flowrun-cu126' and extra == 'extra-7-flowrun-cu130') or (extra != 'extra-7-flowrun-cpu' and extra == 'extra-7-flowrun-cu130')" },
 ]
+numba = [
+    { name = "numba" },
+]
 
 [[package]]
 name = "anndata"
@@ -5091,10 +5094,10 @@ wheels = [
 
 [[package]]
 name = "scfit"
-version = "0.0.14.dev4+g9096876ce"
-source = { git = "https://github.com/selmanozleyen/scfit?branch=feat%2Fopen-adata#9096876ce371707dfa9535c375de197b3b881005" }
+version = "0.0.14.dev5+g1c5a8f13b"
+source = { git = "https://github.com/selmanozleyen/scfit?branch=feat%2Fopen-adata#1c5a8f13b0399e34cd7966736a06142f7e262cd4" }
 dependencies = [
-    { name = "annbatch" },
+    { name = "annbatch", extra = ["numba"] },
     { name = "anndata" },
     { name = "huggingface-hub" },
     { name = "numpy" },
