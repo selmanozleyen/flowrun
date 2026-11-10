@@ -69,6 +69,11 @@ def test_prepare_fits_nothing_on_held_out_rows(tmp_path: Path):
     moved_encoding, base_encoding = (json.loads(a.uns["design_encoding"]) for a in (moved, base))
     for stat in ("mean", "std", "min", "max"):
         assert moved_encoding[stat] == base_encoding[stat]
+    # and directly: the encoding is fit on the training designs, not on val ones
+    designs = ad.read_zarr(tmp_path / "base" / "designs.zarr").obs
+    train = designs.loc[designs["split"] == "train", COLUMNS].to_numpy(float)
+    logged = np.where(base_encoding["log1p"], np.log1p(train), train)
+    np.testing.assert_allclose(base_encoding["mean"], logged.mean(0))
 
 
 def test_prepare_holds_out_the_target_recipe(tmp_path: Path):
@@ -117,10 +122,7 @@ class _Shifted:
         return (x[:, :1] + self.shift).expand(n_populations, 1, len(x), 1)
 
 
-def test_scoring_draws_are_not_the_guiding_ones():
-    guiding, scoring, fresh = labcompass._responses(3, inferer=None, datamodule=None, adata=None)
-    assert guiding.seed == 3 and len({guiding.seed, scoring.seed, fresh.seed}) == 3
-
+def test_best_is_picked_on_scoring_and_reported_on_fresh():
     def potential(ys, ystar):
         return (ys - ystar).squeeze(-1) ** 2
 
@@ -159,13 +161,22 @@ def _guide(root: Path, out: Path, **kwargs) -> dict:
     return labcompass.guide(root / "data", root / "surrogate" / "save", root / "prior" / "save", out, **kwargs)
 
 
-def test_fit_classifier(trained):
-    """The classes are the training cells' types only: "Rare" only shows in the held-out target recipe."""
+def test_fit_classifier(trained, tmp_path: Path):
+    """It learns from training cells only: "Rare" only shows in the held-out target recipe, and moving the held-out
+    cells' markers leaves the fitted weights unchanged."""
     root, fitted = trained
-    _, classes = labcompass.load_classifier(root / "data", "cpu")
+    model, classes = labcompass.load_classifier(root / "data", "cpu")
     assert classes == ["Ery", "MgK_a", "MgK_b", "Mono", labcompass.UNASSIGNED]
     assert fitted["n_classes"] == len(classes)
     assert all(0 <= fitted[f"{s}_accuracy"] <= 1 for s in ("train", "val", "test"))
+
+    cells = ad.read_zarr(root / "data" / "cells.zarr")
+    cells.X[(cells.obs["split"] != "train").to_numpy()] += 100.0
+    cells.write_zarr(tmp_path / "cells.zarr")
+    labcompass.fit_classifier(tmp_path, hidden=8, epochs=1, lr=1e-3, seed=0)
+    moved, _ = labcompass.load_classifier(tmp_path, "cpu")
+    for (name, a), (_, b) in zip(model.state_dict().items(), moved.state_dict().items(), strict=True):
+        torch.testing.assert_close(a, b, msg=name)
 
 
 @pytest.mark.parametrize("readout", ["classifier", "markers"])
@@ -184,10 +195,15 @@ def test_guide(trained, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, readout
         return pred
 
     monkeypatch.setattr(ODEInference, "predict", spy)  # the prior is sampled with ODESolver, not `predict`
+    # and which response each step of the summary uses: guiding has seed 0, scoring 1 and fresh 2
+    seeds, score, best = {"score": set(), "best": set()}, labcompass._score, labcompass._best
+    monkeypatch.setattr(labcompass, "_score", lambda r, *a: seeds["score"].add(r.seed) or score(r, *a))
+    monkeypatch.setattr(labcompass, "_best", lambda r, *a: seeds["best"].add(r.seed) or best(r, *a))
     args = {"n_designs": 4, "n_steps": 3, "scale": 1.0, "max_strength": 10.0, "n_cells": 5, "surrogate_steps": 2}
     summary = _guide(root, tmp_path, readout=readout, seed=0, **args)
 
     assert drawn and set(drawn) == {5}
+    assert seeds == {"score": {1, 2}, "best": {2}}  # `_best` scores its pick on the fresh response
     assert (tmp_path / "summary.json").exists()
     assert summary["args"] == {**args, "readout": readout, "seed": 0}
     assert summary["target_observed_fraction"] == designs.obs["target_fraction"].max()
@@ -225,17 +241,20 @@ def test_guide_refuses_a_foreign_split(trained, tmp_path: Path):
                          readout="markers", seed=0)  # fmt: skip
 
 
-def test_guide_refuses_a_resplit_run(trained, tmp_path: Path):
-    """A prior trained with ``splitter.overwrite=true`` may have seen the held-out recipe."""
+@pytest.mark.parametrize("overwrite", [True, None], ids=["resplit", "no-config"])
+def test_guide_refuses_an_unverified_run(trained, tmp_path: Path, overwrite: bool | None):
+    """A prior trained with ``splitter.overwrite=true``, or one whose run config is gone, may have seen the target."""
     root, _ = trained
-    for part in ("data", "surrogate", "prior"):  # a private copy, so the shared fixture stays untouched
-        shutil.copytree(root / part, tmp_path / part)
-    config = OmegaConf.load(tmp_path / "prior" / "save" / "config_resolved.yaml")
-    config.splitter.overwrite = True
-    OmegaConf.save(config, tmp_path / "prior" / "save" / "config_resolved.yaml")
-    with pytest.raises(ValueError, match="splitter.overwrite=true"):
-        _guide(tmp_path, tmp_path / "out", n_designs=1, n_steps=None, scale=1.0, max_strength=1.0, n_cells=1,
-               surrogate_steps=None, readout="markers", seed=0)  # fmt: skip
+    prior = tmp_path / "prior"  # guide checks the run configs before loading anything, so the config is enough
+    prior.mkdir()
+    if overwrite is not None:
+        config = OmegaConf.load(root / "prior" / "save" / "config_resolved.yaml")
+        config.splitter.overwrite = overwrite
+        OmegaConf.save(config, prior / "config_resolved.yaml")
+    with pytest.raises((ValueError, FileNotFoundError), match="splitter.overwrite=true|is missing"):
+        labcompass.guide(root / "data", root / "surrogate" / "save", prior, tmp_path / "out", n_designs=1,
+                         n_steps=None, scale=1.0, max_strength=1.0, n_cells=1, surrogate_steps=None,
+                         readout="markers", seed=0)  # fmt: skip
 
 
 @pytest.mark.parametrize(("n_steps", "n_cells"), [(1, 1), (None, 0)])

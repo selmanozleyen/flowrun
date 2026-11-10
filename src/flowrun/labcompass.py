@@ -314,7 +314,9 @@ def guide(
         raise ValueError(f"n_cells={n_cells}: the surrogate needs at least one cell per design.")
     for run in (surrogate_dir, prior_dir):
         config = run / "config_resolved.yaml"
-        if config.exists() and OmegaConf.load(config).splitter.overwrite:
+        if not config.exists():
+            raise FileNotFoundError(f"{config} is missing: can't confirm {run} was trained on `prepare`'s split.")
+        if OmegaConf.load(config).splitter.overwrite:
             raise ValueError(f"{run} was trained with splitter.overwrite=true, not on the split `prepare` wrote.")
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
