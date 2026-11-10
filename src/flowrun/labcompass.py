@@ -24,8 +24,9 @@ import anndata as ad
 import numpy as np
 import pandas as pd
 from anndata.acc import A
+from scfit.data import open_adata
+from scipy import sparse
 
-from flowrun.io import open_adata, read_rows
 from flowrun.preprocess import preprocess
 
 DESIGN_KEY = "design"
@@ -45,6 +46,15 @@ DOSES = [
 ]
 LINEAR = ["o2_[%]", "days_of_culture"]
 COLUMNS = DOSES + LINEAR
+
+
+def _rows(array, rows=slice(None)) -> np.ndarray:
+    """Rows of an array, on disk or not, as dense numpy: all, a boolean mask or sorted positions."""
+    if not isinstance(rows, slice):
+        rows = np.asarray(rows)
+        rows = np.flatnonzero(rows) if rows.dtype == bool else np.sort(rows)  # zarr and h5py read sorted rows fastest
+    out = array[rows]
+    return np.asarray(out.toarray() if sparse.issparse(out) else out)
 
 
 def _write(adata: ad.AnnData, path: Path) -> None:
@@ -101,7 +111,7 @@ def prepare(adata_path: Path, out_dir: Path, *, target_prefix: str, n_val: int, 
     encoded = encode(designs.to_numpy(), encoding)
     encoding_json = json.dumps(encoding)
 
-    X = read_rows(adata.X).astype(np.float32)
+    X = _rows(adata.X).astype(np.float32)
     var_names = adata.var_names
 
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -156,7 +166,7 @@ def fit_classifier(data_dir: Path, *, hidden: int, epochs: int, lr: float, seed:
     split = cells.obs["split"].to_numpy()
     classes = sorted(labels[split == "train"].unique())  # a type only held-out designs show is not learnable
     y_all = torch.as_tensor(pd.Index(classes).get_indexer(labels))  # -1 for such a type
-    X_all = torch.as_tensor(read_rows(cells.X).astype(np.float32))
+    X_all = torch.as_tensor(_rows(cells.X).astype(np.float32))
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
     torch.manual_seed(seed)
@@ -331,7 +341,7 @@ def guide(
     designs = open_adata(
         data_dir / "designs.zarr", A.X, A.obs.index, *(A.obs[c] for c in [*COLUMNS, "split", "target_fraction"])
     )
-    designs.X = read_rows(designs.X)  # a few hundred rows
+    designs.X = _rows(designs.X)  # a few hundred rows
     encoding = json.loads(cells.uns["design_encoding"])
     target = str(encoding["target_design"])
     _check_split(cells, designs, target)
@@ -347,10 +357,10 @@ def guide(
     inferer.config = type(inferer.config).model_validate(inferer.config.model_dump() | update)
     first = np.flatnonzero(cells.obs["split"] == "train")[:1]
     context = ad.AnnData(
-        X=read_rows(cells.X, first),
+        X=_rows(cells.X, first),
         obs=cells.obs.iloc[first],
         var=cells.var,
-        obsm={DESIGN_KEY: read_rows(cells.obsm[DESIGN_KEY], first)},
+        obsm={DESIGN_KEY: _rows(cells.obsm[DESIGN_KEY], first)},
     )
     is_target = (cells.obs["design_id"] == target).to_numpy()
     summary = {
@@ -377,7 +387,7 @@ def guide(
         target_classes = torch.as_tensor([c.startswith(encoding["target_prefix"]) for c in classes], device=device)
         readout_fn, potential_fn = (lambda c: classifier(c).softmax(-1)), cross_entropy_probs
     else:
-        ystar = torch.tensor(read_rows(cells.X, is_target).mean(0), device=device)
+        ystar = torch.tensor(_rows(cells.X, is_target).mean(0), device=device)
         readout_fn, potential_fn = None, squared_error
     guiding, scoring, fresh = _responses(
         seed,
