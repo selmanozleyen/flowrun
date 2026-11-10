@@ -1,0 +1,45 @@
+setting,marker,ks,shared
+sample@10,CD41,0.18452774,True
+sample@10,CD117,0.12262213,True
+sample@10,CD38,0.09758489,True
+sample@10,HLA_DR,0.14717898,True
+sample@10,CD131,0.14827728,False
+sample@10,CD201,0.16907656,True
+sample@10,CD244,0.14848928,False
+sample@10,CD62L,0.19674881,False
+sample@10,CD15,0.18247074,True
+sample@10,CD123,0.09965798,True
+sample@10,CD66b,0.1056754,False
+sample@10,CD102,0.08185009,False
+sample@10,CD16,0.19960964,True
+sample@10,CD69,0.16797628,False
+sample@10,CD371,0.14338101,False
+sample@10,CD29,0.10226363,False
+sample@10,CD71,0.09025006,False
+sample@10,CD90,0.15468514,True
+sample@10,CD44,0.15216684,False
+sample@10,CD10,0.09926988,True
+sample@10,CD49f,0.09048727,True
+sample@10,CD14,0.14790191,True
+sample@10,CD45RA,0.09480971,True
+sample@10,CD34,0.10901034,True
+sample@10,CD31,0.13723266,False
+sample@10,CD235a,0.14204556,True
+sample@10,CD19,0.16317248,True
+sample@10,CD1c,0.15939438,False
+old (source),CD10,0.03220761,True
+old (source),CD117,0.038834512,True
+old (source),CD123,0.14852184,True
+old (source),CD14,0.16052455,True
+old (source),CD15,0.031179488,True
+old (source),CD16,0.30698386,True
+old (source),CD19,0.7237463,True
+old (source),CD201,0.069423765,True
+old (source),CD235a,0.14548719,True
+old (source),CD34,0.06729698,True
+old (source),CD38,0.1554746,True
+old (source),CD41,0.12879404,True
+old (source),CD45RA,0.037864447,True
+old (source),CD49f,0.24895802,True
+old (source),CD90,0.43449533,True
+old (source),HLA_DR,0.118334934,True
