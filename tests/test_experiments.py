@@ -57,18 +57,20 @@ def test_cellflow_smoke_runs_on_cellflow_shaped_zarr(tmp_path: Path, experiment:
     assert second.obs["split"].equals(first.obs["split"])
 
 
-def test_zarr_input_reads_only_what_the_run_uses(tmp_path: Path):
+@pytest.mark.parametrize("suffix", [".zarr", ".h5ad"])
+def test_input_reads_only_what_the_run_uses(tmp_path: Path, suffix: str):
     obs = {"drug1": ["control", "a"], "drug2": ["control", "b"], "cell_line": ["x", "x"], "unused": ["u", "v"]}
     uns = {"drug": {"a": np.ones(2)}, "cell_line": {"x": np.ones(2)}, "big_unused_table": np.ones(1000)}
-    ad.AnnData(np.ones((2, 3), dtype=np.float32), obs=obs, uns=uns, obsm={"X_other": np.ones((2, 2))}).write_zarr(
-        tmp_path / "d.zarr"
-    )
+    adata = ad.AnnData(np.ones((2, 3), dtype=np.float32), obs=obs, uns=uns, obsm={"X_other": np.ones((2, 2))})
+    path = tmp_path / f"d{suffix}"
+    adata.write_zarr(path) if suffix == ".zarr" else adata.write_h5ad(path)
     with initialize_config_dir(config_dir=str(Path(fit_cfm.__file__).parent / "configs"), version_base=None):
-        cfg = compose(config_name="fit_cfm", overrides=["+experiment=cellflow"])
-    adata = fit_cfm.read_zarr_input(tmp_path / "d.zarr", cfg)
+        cfg = compose(config_name="fit_cfm", overrides=["+experiment=cellflow", f"paths.target_adata={path}"])
+    (adata,) = fit_cfm.read_inputs(cfg)
     assert set(adata.obs.columns) == {"drug1", "drug2", "cell_line"}
     assert set(adata.uns) == {"drug", "cell_line"}
-    assert not isinstance(adata.obsm["X_other"], np.ndarray)  # left on disk
+    # zarr arrays stay on disk; an h5ad file is read and closed, since fit_cfm writes its split back to it
+    assert isinstance(adata.obsm["X_other"], np.ndarray) == (suffix == ".h5ad")
 
 
 def test_cellflow_smoke_on_controls_and_perturbed_in_separate_files(tmp_path: Path):

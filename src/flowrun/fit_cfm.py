@@ -169,11 +169,15 @@ def as_list(value) -> list:
     return list(value) if isinstance(value, ListConfig | list | tuple) else [value]
 
 
-def read_zarr_input(path: Path, config: DictConfig) -> ad.AnnData:
-    """Read only what the run uses from a zarr AnnData: the obs columns and uns tables the schema and the splitter
-    name, with ``X`` and every ``obsm`` rep left on disk (backed, so unread ones cost nothing)."""
-    import zarr
-    from scfit.data._io import load_backed_adata
+def read_inputs(config: DictConfig) -> list[ad.AnnData]:
+    """The files of ``paths.target_adata``, each with only what the run uses (see :mod:`flowrun.io`).
+
+    The obs columns and uns tables the schema and the splitter name are read; ``X``, every ``obsm`` rep and the
+    ``layers`` the schema names stay on disk, so the reps a run never touches cost nothing.
+    """
+    from anndata.acc import A
+
+    from flowrun import io
 
     dm, splitter = config.datamanager, config.splitter
     cols = {
@@ -185,15 +189,14 @@ def read_zarr_input(path: Path, config: DictConfig) -> ad.AnnData:
         *splitter.group_keys,
     }
     uns = {*dm.categorical_reps.values(), *dm.groups_reps.values()}
-    group = zarr.open_group(path, mode="r")
-    keys = ["X", *(f"obsm/{k}" for k in group.get("obsm", {}))]
-    keys += sorted({r for r in (dm.target_sample_rep, dm.source_sample_rep) if str(r).startswith("layers/")})
-    return load_backed_adata(
-        group,
-        keys=keys,
-        cols=sorted(c for c in cols if c is not None and c in group["obs"]),
-        uns=sorted(k for k in uns if k in group.get("uns", {})),
-    )
+    layers = {r for r in (dm.target_sample_rep, dm.source_sample_rep) if str(r).startswith("layers/")}
+    adatas = []
+    for path in map(Path, as_list(config.paths.target_adata)):
+        present = set(io.keys(path, "obs"))
+        refs = [A.X, *(A.obsm[k] for k in io.keys(path, "obsm")), *(io.resolve(r) for r in sorted(layers))]
+        refs += [A.obs[c] for c in sorted(c for c in cols if c is not None and c in present)]
+        adatas.append(io.open_adata(path, *refs, uns=sorted(k for k in uns if k in io.keys(path, "uns"))))
+    return adatas
 
 
 KEY_PARAMETERS = (
@@ -268,7 +271,7 @@ def main(config: DictConfig) -> float:
     # applied to the data.
     # One file or a list read as one dataset (rows in list order), each file with only what the run uses.
     paths = [Path(p) for p in as_list(config.paths.target_adata)]
-    adatas = [read_zarr_input(p, config) if p.suffix == ".zarr" else ad.read_h5ad(p) for p in paths]
+    adatas = read_inputs(config)
     logger.info(
         f"Read {len(adatas)} file(s): " + ", ".join(f"{p.name} ({a.n_obs} cells)" for p, a in zip(paths, adatas))
     )
