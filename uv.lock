@@ -252,6 +252,9 @@ cupy-cuda12 = [
 cupy-cuda13 = [
     { name = "cupy-cuda13x", extra = ["ctk"], marker = "(extra == 'extra-7-flowrun-cpu' and extra == 'extra-7-flowrun-cu126') or (extra != 'extra-7-flowrun-cu126' and extra == 'extra-7-flowrun-cu130') or (extra != 'extra-7-flowrun-cpu' and extra == 'extra-7-flowrun-cu130')" },
 ]
+numba = [
+    { name = "numba" },
+]
 
 [[package]]
 name = "anndata"
@@ -1350,6 +1353,7 @@ dependencies = [
     { name = "numpy" },
     { name = "omegaconf" },
     { name = "scanpy" },
+    { name = "scfit" },
     { name = "scikit-learn" },
     { name = "sckitflow" },
     { name = "torch", version = "2.14.1+cu126", source = { registry = "https://download.pytorch.org/whl/cu126" }, marker = "extra == 'extra-7-flowrun-cu126' or (extra == 'extra-7-flowrun-cpu' and extra == 'extra-7-flowrun-cu130')" },
@@ -1400,10 +1404,11 @@ requires-dist = [
     { name = "pytest", marker = "extra == 'test'" },
     { name = "pytest-xdist", marker = "extra == 'test'", specifier = ">=3" },
     { name = "scanpy", specifier = ">=1.10" },
+    { name = "scfit", git = "https://github.com/selmanozleyen/scfit?branch=feat%2Fopen-adata" },
     { name = "scikit-learn" },
-    { name = "sckitflow", extras = ["cupy-cuda12"], marker = "extra == 'cu126'", git = "https://github.com/selmanozleyen/sckitflow?branch=feat%2Floss-guidance" },
-    { name = "sckitflow", extras = ["cupy-cuda13"], marker = "extra == 'cu130'", git = "https://github.com/selmanozleyen/sckitflow?branch=feat%2Floss-guidance" },
-    { name = "sckitflow", extras = ["torch"], git = "https://github.com/selmanozleyen/sckitflow?branch=feat%2Floss-guidance" },
+    { name = "sckitflow", extras = ["cupy-cuda12"], marker = "extra == 'cu126'", git = "https://github.com/selmanozleyen/sckitflow?branch=integrate%2Fexperiments" },
+    { name = "sckitflow", extras = ["cupy-cuda13"], marker = "extra == 'cu130'", git = "https://github.com/selmanozleyen/sckitflow?branch=integrate%2Fexperiments" },
+    { name = "sckitflow", extras = ["torch"], git = "https://github.com/selmanozleyen/sckitflow?branch=integrate%2Fexperiments" },
     { name = "torch" },
     { name = "torch", marker = "extra == 'cpu'", index = "https://download.pytorch.org/whl/cpu", conflict = { package = "flowrun", extra = "cpu" } },
     { name = "torch", marker = "extra == 'cu126'", index = "https://download.pytorch.org/whl/cu126", conflict = { package = "flowrun", extra = "cu126" } },
@@ -5089,10 +5094,10 @@ wheels = [
 
 [[package]]
 name = "scfit"
-version = "0.0.13"
-source = { registry = "https://pypi.org/simple" }
+version = "0.0.14.dev6+g8408813f4"
+source = { git = "https://github.com/selmanozleyen/scfit?branch=feat%2Fopen-adata#8408813f4116df3c91dc29c9746a831eafd64c04" }
 dependencies = [
-    { name = "annbatch" },
+    { name = "annbatch", extra = ["numba"] },
     { name = "anndata" },
     { name = "huggingface-hub" },
     { name = "numpy" },
@@ -5108,10 +5113,6 @@ dependencies = [
     { name = "torch", version = "2.15.0", source = { registry = "https://pypi.org/simple" }, marker = "(extra == 'extra-7-flowrun-cpu' and extra == 'extra-7-flowrun-cu126') or (extra == 'extra-7-flowrun-cpu' and extra == 'extra-7-flowrun-cu130') or (extra == 'extra-7-flowrun-cu126' and extra == 'extra-7-flowrun-cu130') or (extra != 'extra-7-flowrun-cpu' and extra != 'extra-7-flowrun-cu126' and extra != 'extra-7-flowrun-cu130')" },
     { name = "torch", version = "2.15.0+cpu", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "(sys_platform != 'darwin' and extra == 'extra-7-flowrun-cpu') or (extra == 'extra-7-flowrun-cpu' and extra == 'extra-7-flowrun-cu126') or (extra == 'extra-7-flowrun-cpu' and extra == 'extra-7-flowrun-cu130') or (extra == 'extra-7-flowrun-cu126' and extra == 'extra-7-flowrun-cu130')" },
     { name = "zarrs" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/44/0d/24294dfeb77d9dab42e0db2a5914faf2bfa996237d175742cff21afec69c/scfit-0.0.13.tar.gz", hash = "sha256:bdb734c7d8228266f9515803a6c5ce51a3e5a80b10779fd99490d40defb24e17", size = 61393, upload-time = "2026-10-26T14:17:08.476Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/a5/8d/1ef42e7bcddf588f86b4ca014c0157cf945a6997817fc7f6aab73c008233/scfit-0.0.13-py3-none-any.whl", hash = "sha256:b496571cce20746910520ecf3652f781e0dcb04b8885a1447f3741851463cf96", size = 30098, upload-time = "2026-10-26T14:17:07.075Z" },
 ]
 
 [package.optional-dependencies]
@@ -5246,8 +5247,8 @@ wheels = [
 
 [[package]]
 name = "sckitflow"
-version = "0.1.dev1046+g5e0119814"
-source = { git = "https://github.com/selmanozleyen/sckitflow?branch=feat%2Floss-guidance#5e0119814792a223fddd2e60c5f9488d5c8d9d2d" }
+version = "0.1.dev1058+g37222290d"
+source = { git = "https://github.com/selmanozleyen/sckitflow?branch=integrate%2Fexperiments#37222290d6732a2961bc15324b2cfc0f4f62c12e" }
 dependencies = [
     { name = "anndata" },
     { name = "lightning" },

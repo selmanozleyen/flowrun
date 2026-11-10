@@ -22,8 +22,8 @@ splitter:
   val_fraction: 0.1
 
 datamanager:
-  target_sample_rep: layers/logicle_trans   # the new panel's markers
-  source_sample_rep: layers/logicle_trans   # the old panel's own markers, read by the source encoder
+  target_sample_rep: layers.logicle_trans   # the new panel's markers
+  source_sample_rep: layers.logicle_trans   # the old panel's own markers, read by the source encoder
   categorical_conditions:
     panel: [dataset]
   categorical_reps:
@@ -32,7 +32,6 @@ datamanager:
     panel: old panel
   lin_from_state: true    # the shared markers
   quad_from_state: true   # each panel's own markers
-  use_linear: true
 
 datamodule:
   n_train_steps: 100

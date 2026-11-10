@@ -20,11 +20,12 @@ from scipy.stats import ks_2samp, pearsonr
 from sklearn.metrics import r2_score
 
 sys.path.insert(0, str(Path(__file__).parent))
-from diagnose import energy_distance, plot, predict  # noqa: E402
-from flowrun.fit_cfm import as_list, enable_zarrs, read_zarr_input  # noqa: E402
-from flowrun.panels import from_state  # noqa: E402
-from sckitflow import Model  # noqa: E402
-from sckitflow.data import FlowDataModule  # noqa: E402
+from diagnose import energy_distance, plot, predict
+from sckitflow import Model
+from sckitflow.data import FlowDataModule
+
+from flowrun.fit_cfm import as_list, enable_zarrs, read_inputs
+from flowrun.panels import from_state
 
 
 def main() -> None:
@@ -34,7 +35,7 @@ def main() -> None:
     enable_zarrs()
     cfg = OmegaConf.load(run / ".hydra" / "config.yaml")
     paths = [Path(p) for p in as_list(cfg.paths.target_adata)]
-    adatas = [read_zarr_input(p, cfg) for p in paths]
+    adatas = read_inputs(cfg, fit_preprocessing=False)
     from_state(adatas, OmegaConf.to_container(cfg.datamanager, resolve=True))
     model = Model.from_pretrained(run / "save", adatas)
     model.module.to("cuda").eval()
@@ -58,9 +59,14 @@ def main() -> None:
     sample = predict(model, step_data, s_test, 10, 1)
     rows = []
     for i, m in enumerate(new_only):
-        rows.append({"marker": m, "R2 flow mean": r2_score(n_test[:, i], mean[:, i]),
-                     "r flow sample": pearsonr(n_test[:, i], sample[:, i]).statistic,
-                     "KS flow sample": ks_2samp(n_test[:, i], sample[:, i]).statistic})
+        rows.append(
+            {
+                "marker": m,
+                "R2 flow mean": r2_score(n_test[:, i], mean[:, i]),
+                "r flow sample": pearsonr(n_test[:, i], sample[:, i]).statistic,
+                "KS flow sample": ks_2samp(n_test[:, i], sample[:, i]).statistic,
+            }
+        )
     table = pd.DataFrame(rows).set_index("marker")
     if gmm_csv is not None and gmm_csv.exists():
         gmm = pd.read_csv(gmm_csv, index_col=0)
@@ -79,13 +85,27 @@ def main() -> None:
     gen[:, s_pos] = old_shared[pick]
     gen[:, n_pos] = predict(model, step_data, old_shared[pick], 10, 1)
     ks = {m: ks_2samp(gen[:, j], real[:, j]).statistic for j, m in enumerate(markers)}
-    summary = {"edist": energy_distance(gen, real), "mean_ks": float(np.mean(list(ks.values()))),
-               "mean_ks_new_only": float(np.mean([ks[m] for m in new_only]))}
-    print(json.dumps(summary), {m: round(ks[m], 3) for m in ("CD45RA", "CD34", "CD62L", "CD41", "CD117", "CD14")},
-          flush=True)
+    summary = {
+        "edist": energy_distance(gen, real),
+        "mean_ks": float(np.mean(list(ks.values()))),
+        "mean_ks_new_only": float(np.mean([ks[m] for m in new_only])),
+    }
+    print(
+        json.dumps(summary),
+        {m: round(ks[m], 3) for m in ("CD45RA", "CD34", "CD62L", "CD41", "CD117", "CD14")},
+        flush=True,
+    )
     src_idx = {m: list(old.var_names).index(m) for m in shared}
-    plot(f"new-only flow ({run.name}), sample@10", gen, real, old_full[pick], markers, shared, src_idx,
-         out / "markers_newonly_sample_10.png")
+    plot(
+        f"new-only flow ({run.name}), sample@10",
+        gen,
+        real,
+        old_full[pick],
+        markers,
+        shared,
+        src_idx,
+        out / "markers_newonly_sample_10.png",
+    )
     pd.Series(ks, name="ks").to_csv(out / "ks_per_marker.csv")
     pd.Series(summary).to_csv(out / "summary.csv")
 

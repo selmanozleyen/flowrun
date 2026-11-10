@@ -4,7 +4,7 @@
 #   flowrun-fit-cfm +experiment=[cellflow,genot] paths.target_adata=/path/to/data.zarr
 # Sources with their own state rep (e.g. ATAC controls, RNA targets): set `datamanager.source_sample_rep`, keep
 # preprocessing off (preprocessing.pca=null, each file carrying its own rep), and match on the quadratic terms
-# (`datamanager.use_linear=false` with `source_rep_quad` / `target_rep_quad`).
+# (`source_rep_quad` / `target_rep_quad` without `rep_lin`).
 
 training:
   generate_from_noise: true

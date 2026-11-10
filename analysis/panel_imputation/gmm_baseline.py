@@ -20,9 +20,10 @@ from scipy.stats import ks_2samp, multivariate_normal
 from sklearn.mixture import GaussianMixture
 
 sys.path.insert(0, str(Path(__file__).parent))
-from diagnose import FOCUS, energy_distance, plot  # noqa: E402
-from flowrun.fit_cfm import as_list, enable_zarrs, read_zarr_input  # noqa: E402
-from flowrun.panels import _state_values, from_state  # noqa: E402
+from diagnose import FOCUS, energy_distance, plot
+
+from flowrun.fit_cfm import enable_zarrs, read_inputs
+from flowrun.panels import from_state, state_values
 
 
 def quantile_match(x: np.ndarray, reference: np.ndarray, n_q: int = 1001) -> np.ndarray:
@@ -64,12 +65,12 @@ def main() -> None:
     out.mkdir(parents=True, exist_ok=True)
     enable_zarrs()
     cfg = OmegaConf.load(run / ".hydra" / "config.yaml")
-    adatas = [read_zarr_input(Path(p), cfg) for p in as_list(cfg.paths.target_adata)]
+    adatas = read_inputs(cfg, fit_preprocessing=False)
     from_state(adatas, OmegaConf.to_container(cfg.datamanager, resolve=True))
     is_source = [str(a.obs["dataset"].iloc[0]) == str(cfg.datamanager.control_values_dict.panel) for a in adatas]
     source, target = adatas[is_source.index(True)], adatas[is_source.index(False)]
     rep, split = cfg.datamanager.target_sample_rep, f"split_{cfg.run.splitter_seed}"
-    source_all, target_all = _state_values(source, rep), _state_values(target, rep)
+    source_all, target_all = state_values(source, rep), state_values(target, rep)
     labels = target.obs[split].astype(str).to_numpy()
     train, real = target_all[labels == "train"], target_all[labels == "test"]
     markers = list(target.var_names)
@@ -106,9 +107,15 @@ def main() -> None:
             gen = gmm.sample(len(rows))[0][rng.permutation(len(rows))]
         ks = {m: ks_2samp(gen[:, j], real[:, j]).statistic for j, m in enumerate(markers)}
         ks_rows += [{"setting": name, "marker": m, "ks": v, "shared": m in shared} for m, v in ks.items()]
-        results.append({"setting": name, "K": K, "edist": energy_distance(gen, real),
-                        "mean_ks": float(np.mean(list(ks.values()))),
-                        "mean_ks_new_only": float(np.mean([ks[markers[j]] for j in n_idx]))})
+        results.append(
+            {
+                "setting": name,
+                "K": K,
+                "edist": energy_distance(gen, real),
+                "mean_ks": float(np.mean(list(ks.values()))),
+                "mean_ks_new_only": float(np.mean([ks[markers[j]] for j in n_idx])),
+            }
+        )
         print(json.dumps(results[-1]), flush=True)
         plot(f"{name} (K={K})", gen, real, source_all[rows], markers, shared, src_idx, out / f"markers_{name}.png")
     table = pd.DataFrame(ks_rows).pivot(index="marker", columns="setting", values="ks")

@@ -1,7 +1,7 @@
 """Preprocessing fitted on the training cells and stored with the data, so the transformation is known.
 
-In order, each optional: PCA (:func:`scanpy.pp.pca` on dask, from ``X``), z-score, whitening. Without PCA the other
-steps start from an existing representation (``obsm[input_key]``) or ``X``. Every step is fitted on the training rows
+In order, each optional: PCA (:func:`scanpy.pp.pca` on dask), z-score, whitening. Every
+steps start from ``input_rep``, a rep string such as ``X``, ``layers.<k>`` or ``obsm.<k>``. Every step is fitted on the training rows
 only and applied to every row, lazily on dask, so a backed zarr input is read chunk by chunk and held-out cells never
 shape the result. The output goes to ``obsm[key_added]``; ``uns["preprocessing"]`` records every fitted step, so
 :func:`apply` repeats the transformation on new data and :func:`inverse` maps predictions back to the input features.
@@ -24,6 +24,7 @@ import scanpy as sc
 import scipy.linalg
 import zarr
 from anndata import AnnData
+from anndata.acc import A, LayerAcc
 from fast_array_utils import stats
 from scipy.sparse import issparse
 
@@ -42,7 +43,7 @@ def preprocess(
     zscore: bool = False,
     whitening: WhiteningMethod | None = None,
     epsilon: float = 1e-8,
-    input_key: str | None = None,
+    input_rep: str,
     key_added: str = "X_pca",
     chunk_size: int = 10_000,
 ) -> None:
@@ -69,8 +70,8 @@ def preprocess(
         the principal axes) or ``"cholesky"``; ``None`` skips it.
     epsilon
         Added to the variances before dividing by them.
-    input_key
-        Where the steps start without PCA: ``obsm[input_key]``, or ``X`` when ``None``. PCA always starts from ``X``.
+    input_rep
+        Where the steps start: ``"X"``, ``"layers.<k>"`` or ``"obsm.<k>"``.
     key_added
         Key of the output in ``obsm``.
     chunk_size
@@ -80,9 +81,9 @@ def preprocess(
     parameters) into every AnnData.
     """
     adatas = [adata] if isinstance(adata, AnnData) else list(adata)
-    source = None if pca is not None else input_key
+    source = A.resolve(input_rep, vec=False)
     for i, other in enumerate(adatas[1:], start=1):
-        if source is None and not other.var_names.equals(adatas[0].var_names):
+        if isinstance(source, LayerAcc) and not other.var_names.equals(adatas[0].var_names):
             raise ValueError(
                 f"AnnData {i} has different genes (var_names) than AnnData 0, but one preprocessing needs one "
                 "feature space. Align the files to a common gene panel, in the same order, first."
@@ -105,7 +106,7 @@ def preprocess(
         raise ValueError("No preprocessing step is set: pass `pca`, `zscore` or `whitening`.")
 
     out = rep.compute()
-    record = {"steps": np.array(list(steps)), "input": "X" if source is None else f"obsm/{source}", **steps}
+    record = {"steps": np.array(list(steps)), "input": input_rep, **steps}
     offsets = np.cumsum([0, *(a.n_obs for a in adatas)])
     for a, start, stop in zip(adatas, offsets[:-1], offsets[1:], strict=True):
         a.obsm[key_added] = out[start:stop]
@@ -184,12 +185,10 @@ def _fit_whitening(train: da.Array, method: WhiteningMethod, epsilon: float) -> 
     return {"mean": mean, "W": W, "W_inv": W_inv, "method": method}
 
 
-def _input(adata: AnnData, key: str | None):
-    if key is None:
-        return adata.X
-    if key not in adata.obsm:
-        raise KeyError(f"obsm[{key!r}] is missing; without `pca` the preprocessing starts from it.")
-    return adata.obsm[key]
+def _input(adata: AnnData, rep):
+    if not rep.isin(adata):
+        raise KeyError(f"{rep} is missing; the preprocessing starts from it (preprocessing.input_rep).")
+    return rep.get(adata)
 
 
 def _as_dask(x, chunk_size: int) -> da.Array:

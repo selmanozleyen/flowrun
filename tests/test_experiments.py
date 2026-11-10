@@ -57,18 +57,63 @@ def test_cellflow_smoke_runs_on_cellflow_shaped_zarr(tmp_path: Path, experiment:
     assert second.obs["split"].equals(first.obs["split"])
 
 
-def test_zarr_input_reads_only_what_the_run_uses(tmp_path: Path):
+@pytest.mark.parametrize("suffix", [".zarr", ".h5ad"])
+def test_input_reads_only_what_the_run_uses(tmp_path: Path, suffix: str):
     obs = {"drug1": ["control", "a"], "drug2": ["control", "b"], "cell_line": ["x", "x"], "unused": ["u", "v"]}
     uns = {"drug": {"a": np.ones(2)}, "cell_line": {"x": np.ones(2)}, "big_unused_table": np.ones(1000)}
-    ad.AnnData(np.ones((2, 3), dtype=np.float32), obs=obs, uns=uns, obsm={"X_other": np.ones((2, 2))}).write_zarr(
-        tmp_path / "d.zarr"
-    )
+    obsm = {"X_pca": np.ones((2, 2)), "X_unused": np.ones((2, 2))}
+    adata = ad.AnnData(np.ones((2, 3), dtype=np.float32), obs=obs, uns=uns, obsm=obsm)
+    path = tmp_path / f"d{suffix}"
+    adata.write_zarr(path) if suffix == ".zarr" else adata.write_h5ad(path)
+
+    def read(*overrides: str, fit: bool = True) -> ad.AnnData:
+        cfg = _cellflow_config(path, *overrides)
+        (adata,) = fit_cfm.read_inputs(cfg, fit_preprocessing=fit and fit_cfm.preprocesses(cfg.preprocessing))
+        # the schema's and the splitter's columns and tables; zarr arrays stay on disk, an h5ad file is read and
+        # closed, since fit_cfm writes its split back to it
+        assert set(adata.obs.columns) == {"drug1", "drug2", "cell_line"}
+        assert set(adata.uns) == {"drug", "cell_line"}
+        assert not adata.layers
+        return adata
+
+    pca = read()  # the PCA writes the state and reads X
+    assert not pca.obsm and pca.X is not None and isinstance(pca.X, np.ndarray) == (suffix == ".h5ad")
+    fitted = read(fit=False)  # a fitted model's inputs: the state the PCA wrote, not X
+    assert fitted.X is None and list(fitted.obsm) == ["X_pca"]
+    existing = read("preprocessing.pca=null")  # the state and the coupling rep, obsm.X_pca, as they are
+    assert existing.X is None and list(existing.obsm) == ["X_pca"]
+    assert isinstance(existing.obsm["X_pca"], np.ndarray) == (suffix == ".h5ad")
+
+
+def _cellflow_config(path, *overrides: str):
     with initialize_config_dir(config_dir=str(Path(fit_cfm.__file__).parent / "configs"), version_base=None):
-        cfg = compose(config_name="fit_cfm", overrides=["+experiment=cellflow"])
-    adata = fit_cfm.read_zarr_input(tmp_path / "d.zarr", cfg)
-    assert set(adata.obs.columns) == {"drug1", "drug2", "cell_line"}
-    assert set(adata.uns) == {"drug", "cell_line"}
-    assert not isinstance(adata.obsm["X_other"], np.ndarray)  # left on disk
+        return compose(
+            config_name="fit_cfm", overrides=["+experiment=cellflow", f"paths.target_adata={path}", *overrides]
+        )
+
+
+def test_each_file_is_opened_with_the_parts_it_holds(tmp_path: Path):
+    """Controls and perturbed cells in separate files, each holding only its side's quadratic rep."""
+    obs = {"drug1": ["control", "a"], "drug2": ["control", "b"], "cell_line": ["x", "x"]}
+    uns = {"drug": {"a": np.ones(2)}, "cell_line": {"x": np.ones(2)}}
+    whole = ad.AnnData(np.ones((2, 3), dtype=np.float32), obs=obs, uns=uns, obsm={"X_pca": np.ones((2, 2))})
+    ctrl, pert = whole[[0]].copy(), whole[[1]].copy()
+    ctrl.obsm["src_quad"], pert.obsm["tgt_quad"] = np.ones((1, 2)), np.ones((1, 3))
+    paths = [tmp_path / "ctrl.zarr", tmp_path / "pert.zarr"]
+    ctrl.write_zarr(paths[0])
+    pert.write_zarr(paths[1])
+    reps = (
+        "preprocessing.pca=null",
+        "datamanager.source_rep_quad=obsm.src_quad",
+        "datamanager.target_rep_quad=obsm.tgt_quad",
+    )
+    cfg = _cellflow_config(f"[{paths[0]},{paths[1]}]", *reps)
+    opened = fit_cfm.read_inputs(cfg, fit_preprocessing=False)
+    assert [sorted(a.obsm) for a in opened] == [["X_pca", "src_quad"], ["X_pca", "tgt_quad"]]
+
+    cfg = _cellflow_config(f"[{paths[0]},{paths[1]}]", *reps[:2], "datamanager.target_rep_quad=obsm.typo")
+    with pytest.raises(KeyError, match=r"lacks obsm\['typo'\]"):
+        fit_cfm.read_inputs(cfg, fit_preprocessing=False)
 
 
 def test_cellflow_smoke_on_controls_and_perturbed_in_separate_files(tmp_path: Path):

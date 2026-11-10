@@ -84,8 +84,9 @@ splitter:
 # -----------------------------------------------------------------------------
 # DataManager (`DataManagerConfig`)
 #
-#   target_sample_rep      the targets' state, the space the flow lives in: an .obsm key (e.g. "X_pca"), "X" or "layers/<key>"
-#   source_sample_rep      .obsm key of the sources' own state, if they have one (needs a source encoder)
+#   Reps name where the array lives: "X", "obsm.<key>" or "layers.<key>" (a bare name is rejected).
+#   target_sample_rep      required: the targets' state, the space the flow lives in (e.g. "obsm.X_pca")
+#   source_sample_rep      the sources' own state rep, if they have one (needs a source encoder)
 #   conditions             obs columns defining the conditional variables
 #   conditions_reps        per-condition representation overrides
 #   conditions_covariates  per-condition extra covariate columns
@@ -96,11 +97,12 @@ splitter:
 #   target_continuous_covs        continuous covariates on the target side
 #   groups / groups_reps          extra grouping metadata
 #   groups_encoding               {group: encoder spec}, e.g. {type: group_encoder.one_hot, categories: [...]}
-#   rep_lin / source_rep_quad / target_rep_quad / use_linear
-#                                 linear-vs-quadratic representation flags
+#   continuous_conditions  continuous condition arrays, e.g. ["obsm.design"], keyed by the array key ("design")
+#   rep_lin / source_rep_quad / target_rep_quad
+#                                 coupling reps; both quadratics without rep_lin is pure Gromov-Wasserstein
 # -----------------------------------------------------------------------------
 datamanager:
-  target_sample_rep: "X_pca"
+  target_sample_rep: "obsm.X_pca"
   source_sample_rep: null        # the sources' own state rep, e.g. ATAC controls flowing into RNA targets
   categorical_conditions: {}
   categorical_reps: {}
@@ -115,8 +117,7 @@ datamanager:
   rep_lin: null
   source_rep_quad: null
   target_rep_quad: null
-  use_linear: true
-  # Coupling terms from the state's feature names (state `X` or `layers/<key>`, the same for sources and targets):
+  # Coupling terms from the state's feature names (state `X` or `layers.<key>`, the same for sources and targets):
   # lin = the features every input file measures, quad = each file's own. Instead of rep_lin / *_rep_quad.
   lin_from_state: false
   quad_from_state: false
@@ -136,7 +137,7 @@ datamodule:
 #
 # In order, each optional: PCA of X, z-score, whitening. Fitted on the training
 # targets and the shared sources, then every cell is transformed into
-# `obsm[datamanager.target_sample_rep]`. The output and every fitted step
+# `datamanager.target_sample_rep` (an `obsm.<key>`). The output and every fitted step
 # (`uns["preprocessing"]`: order, input, parameters) are written into the input
 # file, so `flowrun.preprocess.apply` / `inverse` repeat or undo it. All off:
 # train on an existing `target_sample_rep`.
@@ -148,7 +149,7 @@ preprocessing:
   zscore: false
   whitening: null                 # zca | pca | cholesky
   epsilon: 1.0e-8
-  input_key: null                 # without PCA: start from obsm[input_key] (null: X)
+  input_rep: X                    # where the steps start: X, layers.<key> or obsm.<key>
   overwrite: false                # replace a preprocessing already in the input file
 
 # -----------------------------------------------------------------------------

@@ -18,8 +18,8 @@ preprocessing:
   n_hvg: 2000
 
 datamanager:
-  target_sample_rep: X_pca
-  rep_lin: X_pca                    # OT cost on the PCA space, not on X
+  target_sample_rep: obsm.X_pca
+  rep_lin: obsm.X_pca               # OT cost on the PCA space, not on X
   categorical_conditions:
     drug: [drug1, drug2]            # a combination is a set of drugs
   categorical_reps:

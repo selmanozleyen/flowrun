@@ -18,13 +18,12 @@ import argparse
 import json
 from pathlib import Path
 
-import anndata as ad
 import numpy as np
 import torch
 from omegaconf import OmegaConf
 from sklearn.neighbors import NearestNeighbors
 
-from flowrun.panels import _state_values, from_state
+from flowrun.panels import from_state, state_values
 
 
 def _standardise(x: np.ndarray, reference: np.ndarray) -> np.ndarray:
@@ -76,11 +75,10 @@ def evaluate(save_dir: Path, *, n_cells: int = 5000, k: int = 15, seed: int = 0)
     from sckitflow import Model
     from sckitflow.data import FlowDataModule
 
-    from flowrun.fit_cfm import as_list, read_zarr_input
+    from flowrun.fit_cfm import read_inputs
 
     cfg = OmegaConf.load(save_dir / "config_resolved.yaml")
-    paths = [Path(p) for p in as_list(cfg.paths.target_adata)]
-    adatas = [read_zarr_input(p, cfg) if p.suffix == ".zarr" else ad.read_h5ad(p) for p in paths]
+    adatas = read_inputs(cfg, fit_preprocessing=False)
     from_state(adatas, OmegaConf.to_container(cfg.datamanager, resolve=True))
     model = Model.from_pretrained(save_dir, adatas)
     model.module.to("cuda" if torch.cuda.is_available() else "cpu")
@@ -92,7 +90,7 @@ def evaluate(save_dir: Path, *, n_cells: int = 5000, k: int = 15, seed: int = 0)
     is_source = [str(a.obs[columns[0]].iloc[0]) == control for a in adatas]
     source, target = adatas[is_source.index(True)], adatas[is_source.index(False)]
     state = cfg.datamanager.target_sample_rep
-    source_all, target_all = _state_values(source, state), _state_values(target, state)
+    source_all, target_all = state_values(source, state), state_values(target, state)
 
     rng = np.random.default_rng(seed)
     rows = np.sort(rng.choice(source.n_obs, size=min(n_cells, source.n_obs), replace=False))

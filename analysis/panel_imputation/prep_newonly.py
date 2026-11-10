@@ -40,14 +40,19 @@ def main() -> None:
     o_idx = [list(old.var_names).index(m) for m in shared]
     n_idx = [list(new.var_names).index(m) for m in shared]
     train = (new.obs[split].astype(str) == "train").to_numpy()
-    print(f"old {old.n_obs} x {old.n_vars}, new {new.n_obs} x {new.n_vars}; {len(shared)} shared, "
-          f"{len(new_only)} new-only, {old.n_vars - len(shared)} old-only; new train {train.sum()}", flush=True)
+    print(
+        f"old {old.n_obs} x {old.n_vars}, new {new.n_obs} x {new.n_vars}; {len(shared)} shared, "
+        f"{len(new_only)} new-only, {old.n_vars - len(shared)} old-only; new train {train.sum()}",
+        flush=True,
+    )
 
     old_shared = quantile_match(lo[:, o_idx], ln[train][:, n_idx]).astype(np.float32)
     new_shared = ln[:, n_idx]
     for m, a, b in zip(shared, lo[:, o_idx].T, old_shared.T, strict=True):
-        print(f"  {m:8s} old median {np.median(a):.2f} -> recalibrated {np.median(b):.2f} "
-              f"(new median {np.median(ln[train][:, n_idx[shared.index(m)]]):.2f})")
+        print(
+            f"  {m:8s} old median {np.median(a):.2f} -> recalibrated {np.median(b):.2f} "
+            f"(new median {np.median(ln[train][:, n_idx[shared.index(m)]]):.2f})"
+        )
 
     keep_obs = [c for c in ("dataset", split) if c in old.obs]
     for a, x, rep, quad_key in ((old, lo, old_shared, "quad_old"), (new, ln, new_shared, "quad_new")):
@@ -62,8 +67,10 @@ def main() -> None:
         name = "old_panel.zarr" if a is old else "new_panel.zarr"
         # annbatch's writer: zarr v3, chunked by rows across the full width and sharded, the layout its loader reads
         write_sharded(zarr.open_group(out / name, mode="w", zarr_format=3), slim)
-        print(f"wrote {out / name}: obsm {list(slim.obsm)}, obs {list(slim.obs.columns)}, uns {list(slim.uns)}",
-              flush=True)
+        print(
+            f"wrote {out / name}: obsm {list(slim.obsm)}, obs {list(slim.obs.columns)}, uns {list(slim.uns)}",
+            flush=True,
+        )
     (out / "markers.json").write_text(json.dumps({"shared": shared, "new_only": new_only}, indent=1))
 
 

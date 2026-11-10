@@ -20,8 +20,8 @@ from sklearn.metrics import r2_score
 from sklearn.mixture import GaussianMixture
 from sklearn.neighbors import KNeighborsRegressor
 
-from flowrun.fit_cfm import as_list, enable_zarrs, read_zarr_input
-from flowrun.panels import _state_values, from_state
+from flowrun.fit_cfm import enable_zarrs, read_inputs
+from flowrun.panels import from_state, state_values
 
 
 def gmm_conditional(gmm: GaussianMixture, s: np.ndarray, s_idx, n_idx, rng: np.random.Generator):
@@ -54,11 +54,11 @@ def main() -> None:
     out.mkdir(parents=True, exist_ok=True)
     enable_zarrs()
     cfg = OmegaConf.load(run / ".hydra" / "config.yaml")
-    adatas = [read_zarr_input(Path(p), cfg) for p in as_list(cfg.paths.target_adata)]
+    adatas = read_inputs(cfg, fit_preprocessing=False)
     from_state(adatas, OmegaConf.to_container(cfg.datamanager, resolve=True))
     is_source = [str(a.obs["dataset"].iloc[0]) == str(cfg.datamanager.control_values_dict.panel) for a in adatas]
     source, target = adatas[is_source.index(True)], adatas[is_source.index(False)]
-    x = _state_values(target, cfg.datamanager.target_sample_rep).astype(np.float64)
+    x = state_values(target, cfg.datamanager.target_sample_rep).astype(np.float64)
     labels = target.obs[f"split_{cfg.run.splitter_seed}"].astype(str).to_numpy()
     train, test = x[labels == "train"], x[labels == "test"]
     markers = list(target.var_names)
@@ -80,15 +80,17 @@ def main() -> None:
     rows = []
     for i, j in enumerate(n_idx):
         t = n_test[:, i]
-        rows.append({
-            "marker": markers[j],
-            "R2 gmm mean": r2_score(t, gmm_mean[:, i]),
-            "R2 knn": r2_score(t, knn[:, i]),
-            "R2 linear": r2_score(t, lin[:, i]),
-            "r gmm mean": pearsonr(t, gmm_mean[:, i]).statistic,
-            "r gmm sample": pearsonr(t, gmm_sample[:, i]).statistic,
-            "KS gmm sample": ks_2samp(t, gmm_sample[:, i]).statistic,
-        })
+        rows.append(
+            {
+                "marker": markers[j],
+                "R2 gmm mean": r2_score(t, gmm_mean[:, i]),
+                "R2 knn": r2_score(t, knn[:, i]),
+                "R2 linear": r2_score(t, lin[:, i]),
+                "r gmm mean": pearsonr(t, gmm_mean[:, i]).statistic,
+                "r gmm sample": pearsonr(t, gmm_sample[:, i]).statistic,
+                "KS gmm sample": ks_2samp(t, gmm_sample[:, i]).statistic,
+            }
+        )
     table = pd.DataFrame(rows).set_index("marker").sort_values("R2 gmm mean")
     table.loc["mean"] = table.mean()
     table.to_csv(out / "percell_new_only.csv")

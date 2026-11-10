@@ -23,6 +23,8 @@ from pathlib import Path
 import anndata as ad
 import numpy as np
 import pandas as pd
+from anndata.acc import A
+from scfit.data import open_adata
 from scipy import sparse
 
 from flowrun.preprocess import preprocess
@@ -43,6 +45,16 @@ DOSES = [
     "il3_[ng_ml]",
 ]
 LINEAR = ["o2_[%]", "days_of_culture"]
+COLUMNS = DOSES + LINEAR
+
+
+def _rows(array, rows=slice(None)) -> np.ndarray:
+    """Rows of an array, on disk or not, as dense numpy: all, a boolean mask or sorted positions."""
+    if not isinstance(rows, slice):
+        rows = np.asarray(rows)
+        rows = np.flatnonzero(rows) if rows.dtype == bool else np.sort(rows)  # zarr and h5py read sorted rows fastest
+    out = array[rows]
+    return np.asarray(out.toarray() if sparse.issparse(out) else out)
 
 
 def _write(adata: ad.AnnData, path: Path) -> None:
@@ -61,7 +73,7 @@ def prepare(adata_path: Path, out_dir: Path, *, target_prefix: str, n_val: int, 
     never trained on its recipe. ``n_val`` other designs are "val"; they may share a recipe with training designs.
     Every normalisation is fit on the training rows.
     """
-    adata = ad.read_h5ad(adata_path, backed="r")
+    adata = open_adata(adata_path, A.X, A.obs.index, *(A.obs[c] for c in [*DOSES, *LINEAR, "cell_type"]))
     obs = adata.obs
     raw = pd.DataFrame({c: pd.to_numeric(obs[c].astype(str), errors="coerce") for c in DOSES + LINEAR}, index=obs.index)
     if missing := [c for c in raw if raw[c].isna().any()]:
@@ -99,10 +111,8 @@ def prepare(adata_path: Path, out_dir: Path, *, target_prefix: str, n_val: int, 
     encoded = encode(designs.to_numpy(), encoding)
     encoding_json = json.dumps(encoding)
 
-    X = adata.X[:]
-    X = np.asarray(X.toarray() if sparse.issparse(X) else X, dtype=np.float32)
-    var_names = adata.var_names.astype(str)
-    adata.file.close()
+    X = _rows(adata.X).astype(np.float32)
+    var_names = adata.var_names
 
     out_dir.mkdir(parents=True, exist_ok=True)
     cells = ad.AnnData(
@@ -120,7 +130,7 @@ def prepare(adata_path: Path, out_dir: Path, *, target_prefix: str, n_val: int, 
         uns={"design_encoding": encoding_json},
     )
     # z-scored on the training cells; `uns["preprocessing"]` maps generated cells back with `preprocess.inverse`
-    preprocess(cells, train_mask=cell_split == "train", zscore=True, key_added="zscored")
+    preprocess(cells, train_mask=cell_split == "train", zscore=True, input_rep="X", key_added="zscored")
     cells.X = cells.obsm.pop("zscored").astype(np.float32)
     _write(cells, out_dir / "cells.zarr")
     design_obs = designs.assign(target_fraction=fraction, split=pd.Categorical(split.to_numpy()))
@@ -151,12 +161,12 @@ def fit_classifier(data_dir: Path, *, hidden: int, epochs: int, lr: float, seed:
     """
     import torch
 
-    cells = ad.read_zarr(data_dir / "cells.zarr")
+    cells = open_adata(data_dir / "cells.zarr", A.X, A.obs["cell_type"], A.obs["split"])
     labels = cells.obs["cell_type"].astype(str)  # `prepare` already named the unassigned cells
     split = cells.obs["split"].to_numpy()
     classes = sorted(labels[split == "train"].unique())  # a type only held-out designs show is not learnable
     y_all = torch.as_tensor(pd.Index(classes).get_indexer(labels))  # -1 for such a type
-    X_all = torch.as_tensor(np.asarray(cells.X, dtype=np.float32))
+    X_all = torch.as_tensor(_rows(cells.X).astype(np.float32))
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
     torch.manual_seed(seed)
@@ -320,7 +330,18 @@ def guide(
             raise ValueError(f"{run} was trained with splitter.overwrite=true, not on the split `prepare` wrote.")
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    cells, designs = ad.read_zarr(data_dir / "cells.zarr"), ad.read_zarr(data_dir / "designs.zarr")
+    # cells stay on disk: guidance reads one context cell and, for the markers readout, the target's cells
+    cells = open_adata(
+        data_dir / "cells.zarr",
+        A.X,
+        A.obsm[DESIGN_KEY],
+        *(A.obs[c] for c in ("split", "design_id", "cell_type")),
+        uns=["design_encoding"],
+    )
+    designs = open_adata(
+        data_dir / "designs.zarr", A.X, A.obs.index, *(A.obs[c] for c in [*COLUMNS, "split", "target_fraction"])
+    )
+    designs.X = _rows(designs.X)  # a few hundred rows
     encoding = json.loads(cells.uns["design_encoding"])
     target = str(encoding["target_design"])
     _check_split(cells, designs, target)
@@ -334,7 +355,13 @@ def guide(
     # its own design is replaced by the optimized one, so a single training cell is enough.
     update = {"n_samples": n_cells} | ({} if surrogate_steps is None else {"n_steps": surrogate_steps})
     inferer.config = type(inferer.config).model_validate(inferer.config.model_dump() | update)
-    context = cells[np.flatnonzero(cells.obs["split"] == "train")[:1]].copy()
+    first = np.flatnonzero(cells.obs["split"] == "train")[:1]
+    context = ad.AnnData(
+        X=_rows(cells.X, first),
+        obs=cells.obs.iloc[first],
+        var=cells.var,
+        obsm={DESIGN_KEY: _rows(cells.obsm[DESIGN_KEY], first)},
+    )
     is_target = (cells.obs["design_id"] == target).to_numpy()
     summary = {
         "args": {
@@ -360,7 +387,7 @@ def guide(
         target_classes = torch.as_tensor([c.startswith(encoding["target_prefix"]) for c in classes], device=device)
         readout_fn, potential_fn = (lambda c: classifier(c).softmax(-1)), cross_entropy_probs
     else:
-        ystar = torch.tensor(np.asarray(cells.X[is_target]).mean(0), device=device)
+        ystar = torch.tensor(_rows(cells.X, is_target).mean(0), device=device)
         readout_fn, potential_fn = None, squared_error
     guiding, scoring, fresh = _responses(
         seed,
