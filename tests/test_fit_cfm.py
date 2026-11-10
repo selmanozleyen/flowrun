@@ -54,7 +54,7 @@ Coupling                DM reps                      VF source encoder
 
 Notes
 -----
-* ``rep_lin=X_coupling_lin`` (not ``X_repr`` / ``X_src``): the fixture's
+* ``rep_lin=obsm.X_coupling_lin`` (not ``X_repr`` / ``X_src``): the fixture's
   ``X_coupling_lin`` is generated fresh with i.i.d. noise per cell, so the
   coupling cost matrix is non-degenerate regardless of how the base
   fixture shapes its other reps.
@@ -269,7 +269,7 @@ _SCHEMA_PAIRS: dict[str, tuple[list[str], list[str]]] = {
     "groups_only": (
         overrides(
             "datamanager",
-            target_sample_rep="X_repr",
+            target_sample_rep="obsm.X_repr",
             **_dm_shared(
                 groups=["source_split"],
                 groups_encoding={"source_split": SOURCE_SPLIT_LABELS},
@@ -282,9 +282,9 @@ _SCHEMA_PAIRS: dict[str, tuple[list[str], list[str]]] = {
     "one_cont_unpaired": (
         overrides(
             "datamanager",
-            target_sample_rep="X_repr",
+            target_sample_rep="obsm.X_repr",
             **_dm_shared(
-                continuous_conditions=["X_tgt"],
+                continuous_conditions=["obsm.X_tgt"],
                 groups=["source_split"],
                 groups_encoding={"source_split": SOURCE_SPLIT_LABELS},
             ),
@@ -295,7 +295,7 @@ _SCHEMA_PAIRS: dict[str, tuple[list[str], list[str]]] = {
     "one_cat_unpaired": (
         overrides(
             "datamanager",
-            target_sample_rep="X_repr",
+            target_sample_rep="obsm.X_repr",
             **_dm_shared(
                 categorical_conditions={"drug": ["drugA"]},
                 categorical_reps={"drug": "drug"},
@@ -307,7 +307,7 @@ _SCHEMA_PAIRS: dict[str, tuple[list[str], list[str]]] = {
     "one_cat_paired": (
         overrides(
             "datamanager",
-            target_sample_rep="X_repr",
+            target_sample_rep="obsm.X_repr",
             **_dm_shared(
                 categorical_conditions={"drug": ["drugA"]},
                 categorical_reps={"drug": "drug"},
@@ -319,7 +319,7 @@ _SCHEMA_PAIRS: dict[str, tuple[list[str], list[str]]] = {
     "one_cat_paired_with_groups": (
         overrides(
             "datamanager",
-            target_sample_rep="X_repr",
+            target_sample_rep="obsm.X_repr",
             **_dm_shared(
                 categorical_conditions={"drug": ["drugA"]},
                 categorical_reps={"drug": "drug"},
@@ -335,7 +335,7 @@ _SCHEMA_PAIRS: dict[str, tuple[list[str], list[str]]] = {
     "two_cat_unpaired": (
         overrides(
             "datamanager",
-            target_sample_rep="X_repr",
+            target_sample_rep="obsm.X_repr",
             **_dm_shared(
                 categorical_conditions={"drug": ["drugA"], "ko": ["koA"]},
                 categorical_reps={"drug": "drug", "ko": "ko"},
@@ -346,7 +346,7 @@ _SCHEMA_PAIRS: dict[str, tuple[list[str], list[str]]] = {
     "two_cat_paired": (
         overrides(
             "datamanager",
-            target_sample_rep="X_repr",
+            target_sample_rep="obsm.X_repr",
             **_dm_shared(
                 categorical_conditions={"drug": ["drugA"], "ko": ["koA"]},
                 categorical_reps={"drug": "drug", "ko": "ko"},
@@ -358,7 +358,7 @@ _SCHEMA_PAIRS: dict[str, tuple[list[str], list[str]]] = {
     "two_cat_paired_with_groups": (
         overrides(
             "datamanager",
-            target_sample_rep="X_repr",
+            target_sample_rep="obsm.X_repr",
             **_dm_shared(
                 categorical_conditions={"drug": ["drugA"], "ko": ["koA"]},
                 categorical_reps={"drug": "drug", "ko": "ko"},
@@ -373,11 +373,11 @@ _SCHEMA_PAIRS: dict[str, tuple[list[str], list[str]]] = {
     "one_cat_one_cont_paired": (
         overrides(
             "datamanager",
-            target_sample_rep="X_repr",
+            target_sample_rep="obsm.X_repr",
             **_dm_shared(
                 categorical_conditions={"drug": ["drugA"]},
                 categorical_reps={"drug": "drug"},
-                continuous_conditions=["X_tgt"],
+                continuous_conditions=["obsm.X_tgt"],
                 control_values_dict={"drug": "control"},
             ),
         ),
@@ -386,11 +386,11 @@ _SCHEMA_PAIRS: dict[str, tuple[list[str], list[str]]] = {
     "two_cat_one_cont_paired": (
         overrides(
             "datamanager",
-            target_sample_rep="X_repr",
+            target_sample_rep="obsm.X_repr",
             **_dm_shared(
                 categorical_conditions={"drug": ["drugA"], "ko": ["koA"]},
                 categorical_reps={"drug": "drug", "ko": "ko"},
-                continuous_conditions=["X_tgt"],
+                continuous_conditions=["obsm.X_tgt"],
                 control_values_dict={"drug": "control", "ko": "control"},
             ),
         ),
@@ -400,7 +400,7 @@ _SCHEMA_PAIRS: dict[str, tuple[list[str], list[str]]] = {
     "sample_rep_x_src": (
         overrides(
             "datamanager",
-            target_sample_rep="X_src",
+            target_sample_rep="obsm.X_src",
             **_dm_shared(
                 categorical_conditions={"drug": ["drugA"]},
                 categorical_reps={"drug": "drug"},
@@ -468,31 +468,31 @@ _COUPLING_PAIRS: dict[str, list[str]] = {
     "exact": _coupling_pair(
         "exact",
         base_schema="one_cat_paired",
-        dm_extra={"rep_lin": "X_coupling_lin"},
+        dm_extra={"rep_lin": "obsm.X_coupling_lin"},
     ),
     "sinkhorn": _coupling_pair(
         "sinkhorn",
         base_schema="one_cat_paired",
-        dm_extra={"rep_lin": "X_coupling_lin"},
+        dm_extra={"rep_lin": "obsm.X_coupling_lin"},
     ),
     "partial": _coupling_pair(
         "partial",
         base_schema="one_cat_paired",
-        dm_extra={"rep_lin": "X_coupling_lin"},
+        dm_extra={"rep_lin": "obsm.X_coupling_lin"},
     ),
     "unbalanced": _coupling_pair(
         "unbalanced",
         base_schema="one_cat_paired",
-        dm_extra={"rep_lin": "X_coupling_lin"},
+        dm_extra={"rep_lin": "obsm.X_coupling_lin"},
     ),
     # ---- Gromov-Wasserstein — linear + quads, source encoder ON ------
     "gromov_wasserstein": _coupling_pair(
         "gromov-wasserstein",
         base_schema="one_cat_paired",
         dm_extra={
-            "rep_lin": "X_coupling_lin",
-            "source_rep_quad": "X_src_quad",
-            "target_rep_quad": "X_tgt_quad",
+            "rep_lin": "obsm.X_coupling_lin",
+            "source_rep_quad": "obsm.X_src_quad",
+            "target_rep_quad": "obsm.X_tgt_quad",
         },
         vf_overrides=_enable_source_encoder(),
     ),
@@ -501,9 +501,9 @@ _COUPLING_PAIRS: dict[str, list[str]] = {
         "fused",
         base_schema="one_cat_paired",
         dm_extra={
-            "rep_lin": "X_coupling_lin",
-            "source_rep_quad": "X_src_quad",
-            "target_rep_quad": "X_tgt_quad",
+            "rep_lin": "obsm.X_coupling_lin",
+            "source_rep_quad": "obsm.X_src_quad",
+            "target_rep_quad": "obsm.X_tgt_quad",
         },
         vf_overrides=_enable_source_encoder(),
     ),
@@ -685,8 +685,8 @@ class TestFitCFMRunsAxes:
                     pair="one_cat_paired",
                     datamanager=[
                         "datamanager.use_linear=false",
-                        "datamanager.source_rep_quad=X_src_quad",
-                        "datamanager.target_rep_quad=X_tgt_quad",
+                        "datamanager.source_rep_quad=obsm.X_src_quad",
+                        "datamanager.target_rep_quad=obsm.X_tgt_quad",
                     ],
                 ),
                 id="use-linear-false",

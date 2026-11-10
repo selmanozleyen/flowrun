@@ -9,8 +9,8 @@ splitter:
   group_keys: []
 
 datamanager:
-  target_sample_rep: null
-  continuous_conditions: [design]
+  target_sample_rep: X
+  continuous_conditions: [obsm.design]
 
 probability_path:
   type: probability_path.linear

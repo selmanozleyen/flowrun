@@ -8,7 +8,7 @@ splitter:
   group_keys: []
 
 datamanager:
-  target_sample_rep: null
+  target_sample_rep: X
 
 probability_path:
   type: probability_path.linear
