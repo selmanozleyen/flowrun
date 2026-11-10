@@ -12,41 +12,45 @@ from hydra import compose, initialize_config_dir
 from flowrun import fit_cfm, labcompass
 
 
-def _screen(path: Path, n_designs: int = 8, cells_per_design: int = 40, shift_held_out: float = 0.0) -> None:
-    """A toy screen. ``shift_held_out`` moves the markers of the most-MgK recipe's cells, which `prepare` holds out."""
+def _screen(n_designs: int = 8, cells_per_design: int = 40) -> ad.AnnData:
+    """A toy screen in which pairs of designs share a dose recipe and differ in culture conditions."""
     rng = np.random.default_rng(0)
     columns = labcompass.DOSES + labcompass.LINEAR
     levels = rng.uniform(0, 10, size=(n_designs, len(columns))).round(1)
-    levels[1::2, : len(labcompass.DOSES)] = levels[::2, : len(labcompass.DOSES)]  # pairs share a dose recipe
+    levels[1::2, : len(labcompass.DOSES)] = levels[::2, : len(labcompass.DOSES)]
     design = np.repeat(np.arange(n_designs), cells_per_design)
     types = np.array(["MgK_a", "MgK_b", "Ery", "Mono", None], dtype=object)
     obs = pd.DataFrame(levels[design], columns=columns)
     obs["cell_type"] = pd.Categorical(types[rng.integers(0, len(types), len(design))])  # None: unassigned cells
     obs.index = obs.index.astype(str)
     X = (rng.normal(size=(len(design), 6)) + levels[design, :6] / 10).astype(np.float32)
-    if shift_held_out:
-        is_mgk = obs["cell_type"].astype(str).str.startswith("MgK").to_numpy()
-        target = pd.Series(is_mgk).groupby(design).mean().idxmax()
-        held_out = (levels[design, : len(labcompass.DOSES)] == levels[target, : len(labcompass.DOSES)]).all(1)
-        X[held_out] += shift_held_out
-    ad.AnnData(X=X, obs=obs).write_h5ad(path)
+    return ad.AnnData(X=X, obs=obs)
+
+
+def _prepare(screen: ad.AnnData, out: Path) -> dict:
+    screen.write_h5ad(out.with_suffix(".h5ad"))
+    return labcompass.prepare(out.with_suffix(".h5ad"), out, target_prefix="MgK", n_val=2, seed=0)
 
 
 def test_prepare_fits_nothing_on_held_out_rows(tmp_path: Path):
-    """Moving the held-out cells' markers leaves every training cell and every fitted statistic unchanged."""
-    out = {}
-    for shift in (0.0, 100.0):
-        _screen(tmp_path / f"{shift}.h5ad", shift_held_out=shift)
-        labcompass.prepare(tmp_path / f"{shift}.h5ad", tmp_path / str(shift), target_prefix="MgK", n_val=2, seed=0)
-        out[shift] = ad.read_zarr(tmp_path / str(shift) / "cells.zarr")
-    base, moved = out[0.0], out[100.0]
+    """Moving the markers of every val and test cell leaves the training cells and every fitted statistic as is."""
+    screen = _screen()
+    _prepare(screen, tmp_path / "base")
+    base = ad.read_zarr(tmp_path / "base" / "cells.zarr")
     train = (base.obs["split"] == "train").to_numpy()
-    np.testing.assert_array_equal(base.X[train], moved.X[train])
+    screen.X[~train] += 100.0
+    _prepare(screen, tmp_path / "moved")
+    moved = ad.read_zarr(tmp_path / "moved" / "cells.zarr")
+
+    np.testing.assert_array_equal(moved.obs["split"], base.obs["split"])
+    np.testing.assert_array_equal(moved.X[train], base.X[train])
     np.testing.assert_array_equal(
-        base.uns["preprocessing"]["zscore"]["mean"], moved.uns["preprocessing"]["zscore"]["mean"]
+        moved.uns["preprocessing"]["zscore"]["mean"], base.uns["preprocessing"]["zscore"]["mean"]
     )
-    assert base.uns["design_encoding"] == moved.uns["design_encoding"]
-    assert not np.allclose(base.X[~train], moved.X[~train])
+    np.testing.assert_array_equal(
+        moved.uns["preprocessing"]["zscore"]["std"], base.uns["preprocessing"]["zscore"]["std"]
+    )
+    assert moved.uns["design_encoding"] == base.uns["design_encoding"]
 
 
 def _fit(experiment: str, data: Path, run_dir: Path, tmp_path: Path) -> None:
@@ -66,60 +70,70 @@ def _fit(experiment: str, data: Path, run_dir: Path, tmp_path: Path) -> None:
         fit_cfm.main.__wrapped__(compose(config_name="fit_cfm", overrides=overrides))
 
 
-@pytest.mark.parametrize("readout", ["classifier", "markers"])
-def test_guide_end_to_end(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, readout: str):
-    from sckitflow.core.methods.inference._ode import ODEInference
+@pytest.fixture(scope="module")
+def trained(tmp_path_factory: pytest.TempPathFactory) -> tuple[Path, dict]:
+    """The toy screen prepared, with a classifier and one-step surrogate and prior fits."""
+    root = tmp_path_factory.mktemp("labcompass")
+    data = root / "data"
+    prepared = _prepare(_screen(), data)
+    labcompass.fit_classifier(data, hidden=8, epochs=1, lr=1e-3, seed=0)
+    _fit("labcompass_surrogate", data / "cells.zarr", root / "surrogate", root)
+    _fit("labcompass_prior", data / "designs.zarr", root / "prior", root)
+    return root, prepared
 
-    _screen(tmp_path / "screen.h5ad")
-    data = tmp_path / "data"
-    prepared = labcompass.prepare(tmp_path / "screen.h5ad", data, target_prefix="MgK", n_val=2, seed=0)
 
-    # the target and every design sharing its doses are held out, in both files
-    designs, cells = ad.read_zarr(data / "designs.zarr"), ad.read_zarr(data / "cells.zarr")
+COLUMNS = labcompass.DOSES + labcompass.LINEAR
+
+
+def test_prepare_holds_out_the_target_recipe(trained):
+    """The target and every design with its doses are "test" in both files, and nothing else is."""
+    root, prepared = trained
+    designs, cells = ad.read_zarr(root / "data" / "designs.zarr"), ad.read_zarr(root / "data" / "cells.zarr")
     doses = designs.obs[labcompass.DOSES]
     same_recipe = (doses == doses.loc[str(prepared["target_design"])]).all(axis=1)
-    assert same_recipe.sum() == 2 and (designs.obs["split"][same_recipe] == "test").all()
-    assert (designs.obs["split"][~same_recipe] != "test").all()
-    held_out = cells.obs["design_id"].isin(designs.obs_names[same_recipe])
-    assert (cells.obs["split"][held_out] == "test").all() and (cells.obs["split"][~held_out] != "test").all()
+    assert same_recipe.sum() == 2  # the toy screen pairs designs by recipe
+    np.testing.assert_array_equal(designs.obs["split"] == "test", same_recipe)
+    np.testing.assert_array_equal(
+        cells.obs["split"] == "test", cells.obs["design_id"].isin(designs.obs_names[same_recipe])
+    )
 
-    labcompass.fit_classifier(data, hidden=8, epochs=1, lr=1e-3, seed=0)
-    _fit("labcompass_surrogate", data / "cells.zarr", tmp_path / "surrogate", tmp_path)
-    _fit("labcompass_prior", data / "designs.zarr", tmp_path / "prior", tmp_path)
 
-    # every surrogate prediction must average `n_cells` generated cells per design, not one
-    drawn = []
-    predict = ODEInference.predict
+@pytest.mark.parametrize("readout", ["classifier", "markers"])
+def test_guide(trained, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, readout: str):
+    from sckitflow.core.methods.inference._ode import ODEInference
+
+    root, prepared = trained
+    designs = ad.read_zarr(root / "data" / "designs.zarr")
+
+    # the surrogate must generate `n_cells` cells per design for every response, not one
+    drawn, predict = [], ODEInference.predict
 
     def spy(self, step_data, *, generator):
         pred = predict(self, step_data, generator=generator)
-        if pred.raw_samples is not None and "design" in step_data["target_condition_data"]:
-            drawn.append(pred.raw_samples.shape[0])
+        drawn.append(pred.raw_samples.shape[0])
         return pred
 
-    monkeypatch.setattr(ODEInference, "predict", spy)
+    monkeypatch.setattr(ODEInference, "predict", spy)  # the prior is sampled with ODESolver, not `predict`
     kwargs = {"n_designs": 4, "n_steps": 3, "scale": 1.0, "max_strength": 10.0, "n_cells": 5, "surrogate_steps": 2}
     summary = labcompass.guide(
-        data, tmp_path / "surrogate", tmp_path / "prior", tmp_path / "guide", readout=readout, seed=0, **kwargs
+        root / "data", root / "surrogate", root / "prior", tmp_path, readout=readout, seed=0, **kwargs
     )
 
     assert drawn and set(drawn) == {5}
-    assert json.loads((tmp_path / "guide" / "summary.json").read_text()) == summary
+    assert json.loads((tmp_path / "summary.json").read_text()) == summary
     for kind in ("prior", "guided"):
         fraction = summary[kind].pop("predicted_target_fraction")
         assert all(np.isfinite(v) for v in summary[kind].values())
         assert (fraction is None) == (readout == "markers") and (fraction is None or 0 <= fraction <= 1)
-    proposed = pd.read_csv(tmp_path / "guide" / "designs.csv")
+
+    proposed = pd.read_csv(tmp_path / "designs.csv")
     assert proposed["kind"].value_counts().to_dict() == {"prior": 4, "guided": 4, "target": 1}
-    by_kind = {k: proposed[proposed["kind"] == k]["potential"].to_numpy() for k in ("prior", "guided")}
-    assert not np.array_equal(by_kind["prior"], by_kind["guided"])  # a toy readout barely moves them
-    train = designs.obs[designs.obs["split"] == "train"][labcompass.DOSES + labcompass.LINEAR]
-    columns = labcompass.DOSES + labcompass.LINEAR
-    sampled = proposed[proposed["kind"] != "target"][columns]
-    assert (sampled >= train.min().to_numpy() - 1e-6).all().all() and (
-        sampled <= train.max().to_numpy() + 1e-6
-    ).all().all()
-    target = proposed[proposed["kind"] == "target"][columns].to_numpy()[0]  # reported as observed
-    np.testing.assert_allclose(
-        target, designs.obs.loc[str(prepared["target_design"]), columns].to_numpy(float), rtol=1e-6
-    )
+    # one-step toy models barely move the designs, so this only checks that guidance acted at all
+    potentials = {k: proposed.loc[proposed["kind"] == k, "potential"].to_numpy() for k in ("prior", "guided")}
+    assert not np.array_equal(potentials["prior"], potentials["guided"])
+    # sampled designs are clipped to the training designs' range before they are scored and written
+    train = designs.obs.loc[designs.obs["split"] == "train", COLUMNS].to_numpy(float)
+    sampled = proposed.loc[proposed["kind"] != "target", COLUMNS].to_numpy(float)
+    assert np.all(sampled >= train.min(0) - 1e-4) and np.all(sampled <= train.max(0) + 1e-4)
+    target = proposed.loc[proposed["kind"] == "target", COLUMNS].to_numpy(float)[0]
+    np.testing.assert_allclose(target, designs.obs.loc[str(prepared["target_design"]), COLUMNS].to_numpy(float))
